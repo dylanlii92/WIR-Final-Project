@@ -17,6 +17,7 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     name TEXT,
+    artist TEXT,
     date TEXT,
     city TEXT,
     country TEXT,
@@ -51,10 +52,27 @@ CITIES = [
     "Cincinnati", "Pittsburgh", "Las Cruces", "Albuquerque"
 ]
 
+def extract_artists(event):
+    """
+    Extracts artist names from Ticketmaster attractions.
+    """
+
+    attractions = event.get("_embedded", {}).get("attractions", [])
+
+    artist_names = []
+
+    for attraction in attractions:
+        name = attraction.get("name")
+
+        if name:
+            artist_names.append(name)
+
+    return ", ".join(artist_names)
 
 def save_event(event, source):
     event_id = event.get("id")
     name = event.get("name")
+    artist = extract_artists(event)
     url = event.get("url", "")
 
     start = event.get("dates", {}).get("start", {})
@@ -90,22 +108,23 @@ def save_event(event, source):
     image = images[0].get("url", "") if images else ""
 
     cursor.execute("""
-        INSERT OR IGNORE INTO events
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        event_id,
-        name,
-        date,
-        city,
-        country,
-        venue,
-        genre,
-        subgenre,
-        description,
-        image,
-        url,
-        source
-    ))
+    INSERT OR IGNORE INTO events
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", (
+    event_id,
+    name,
+    artist,
+    date,
+    city,
+    country,
+    venue,
+    genre,
+    subgenre,
+    description,
+    image,
+    url,
+    source
+))
 
 
 def fetch(params, source):

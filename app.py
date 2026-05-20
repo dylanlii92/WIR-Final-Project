@@ -1,5 +1,8 @@
 from flask import Flask, render_template, jsonify, request
 
+from database_service import search_events
+from groq_service import extract_search_intent
+
 app = Flask(__name__)
 
 
@@ -10,32 +13,35 @@ def home():
 
 @app.route("/ask")
 def ask():
+    user_query = request.args.get("q", "")
 
-    query = request.args.get("q", "")
+    if not user_query:
+        return jsonify({
+            "results": []
+        })
 
-    fake_results = [
-        {
-            "name": "Sunset Chill Festival",
-            "date": "2026-07-18",
-            "venue": "LA Downtown Arena",
-            "city": "Los Angeles",
-            "image": "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f",
-            "url": "https://www.ticketmaster.com",
-            "explanation": f"This event matches '{query}' because it includes chill and indie music vibes."
-        },
-        {
-            "name": "Midnight EDM Experience",
-            "date": "2026-08-03",
-            "venue": "Miami Beach Stage",
-            "city": "Miami",
-            "image": "https://images.unsplash.com/photo-1501386761578-eac5c94b800a",
-            "url": "https://www.ticketmaster.com",
-            "explanation": "This event is popular for energetic electronic music performances."
-        }
-    ]
+    intent = extract_search_intent(user_query)
+
+    search_keyword = intent.get("keyword") or user_query
+    search_city = intent.get("city", "")
+    search_genres = intent.get("genres", [])
+
+    results = search_events(
+    query=user_query,
+    city=intent.get("city", ""),
+    genres=intent.get("genres", [])
+)
+
+    for event in results:
+        event["explanation"] = (
+            "This event matches your search based on its title, "
+            "genre, location, venue, or description."
+        )
 
     return jsonify({
-        "results": fake_results
+        "query": user_query,
+        "intent": intent,
+        "results": results
     })
 
 
