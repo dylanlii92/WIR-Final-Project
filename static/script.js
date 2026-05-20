@@ -3,6 +3,7 @@ const searchInput = document.getElementById("search-input");
 const resultsContainer = document.getElementById("results");
 const statusContainer = document.getElementById("status");
 
+
 searchForm.addEventListener("submit", async function (event) {
     event.preventDefault();
 
