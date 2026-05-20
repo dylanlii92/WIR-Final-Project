@@ -1,13 +1,15 @@
-import requests
-import sqlite3
+import os
 import time
+import sqlite3
+import requests
 
-API_KEY = "4TXAXqdt2PlnR7i4QK6ceYp1pjivoB0n"
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_KEY = os.getenv("JENNY_TICKETMASTER_API_KEY")
 BASE_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 
-# ---------------------------
-# SQLITE
-# ---------------------------
 conn = sqlite3.connect("ticketmaster_music.db")
 cursor = conn.cursor()
 
@@ -18,52 +20,94 @@ CREATE TABLE IF NOT EXISTS events (
     date TEXT,
     city TEXT,
     country TEXT,
+    venue TEXT,
+    genre TEXT,
+    subgenre TEXT,
+    description TEXT,
+    image TEXT,
+    url TEXT,
     source TEXT
 )
 """)
 
 conn.commit()
 
-# ---------------------------
-# STRATEGY (IMPORTANT)
-# ---------------------------
+
 KEYWORDS = [
-    "concert", "music", "live", "festival", "tour", "DJ", "band", "orchestra", "symphony", "opera", "hip hop", "rock", "pop", "jazz", "classical", "electronic", "indie", "alternative", "country", "reggae", "blues", "metal", "punk", "folk", "R&B", "soul", "funk", "latin", "world", "gospel", "choir", "karaoke", "open mic", "jam session", "music hall", "arena", "stadium", "amphitheater", "venue", "evening", "night", "party", "weekend"
+    "concert", "music", "live", "festival", "tour", "DJ", "band", "orchestra",
+    "symphony", "opera", "hip hop", "rock", "pop", "jazz", "classical", "electronic",
+    "indie", "alternative", "country", "reggae", "blues", "metal", "punk", "folk", "R&B",
+    "soul", "funk", "latin", "world", "gospel", "choir", "karaoke", "open mic", "jam session",
+    "music hall", "arena", "stadium", "amphitheater", "venue", "evening", "night", "party", "weekend"
 ]
+
 CITIES = [
     "New York", "Los Angeles", "Chicago", "Houston",
     "Miami", "Seattle", "Boston", "Atlanta",
-    "San Francisco", "Las Vegas", "Dallas", "Denver", "Phoenix", "Portland", "Orlando", "San Diego", "Washington", "Philadelphia", "Austin", "Nashville", "Detroit", "Minneapolis", "Cleveland", "St. Louis", "Baltimore", "Charlotte", "Columbus", "Indianapolis", "San Antonio", "San Jose", "New Orleans", "Memphis", "Kansas City", "Sacramento", "Raleigh", "Oklahoma City", "Cincinnati", "Pittsburgh", "Las Cruces", "Albuquerque"
+    "San Francisco", "Las Vegas", "Dallas", "Denver", "Phoenix", "Portland", "Orlando",
+    "San Diego", "Washington", "Philadelphia", "Austin", "Nashville", "Detroit", "Minneapolis",
+    "Cleveland", "St. Louis", "Baltimore", "Charlotte", "Columbus", "Indianapolis", "San Antonio",
+    "San Jose", "New Orleans", "Memphis", "Kansas City", "Sacramento", "Raleigh", "Oklahoma City",
+    "Cincinnati", "Pittsburgh", "Las Cruces", "Albuquerque"
 ]
 
-# ---------------------------
+
 def save_event(event, source):
-    try:
-        event_id = event["id"]
-        name = event.get("name")
+    event_id = event.get("id")
+    name = event.get("name")
+    url = event.get("url", "")
 
-        date = None
-        if event.get("dates"):
-            date = event["dates"]["start"].get("localDate")
+    start = event.get("dates", {}).get("start", {})
+    date = start.get("localDate")
 
-        city = None
-        country = None
+    description = (
+        event.get("info")
+        or event.get("pleaseNote")
+        or event.get("description")
+        or ""
+    )
 
-        if event.get("_embedded"):
-            venues = event["_embedded"].get("venues", [])
-            if venues:
-                city = venues[0].get("city", {}).get("name")
-                country = venues[0].get("country", {}).get("name")
+    venue = ""
+    city = ""
+    country = ""
 
-        cursor.execute("""
-            INSERT OR IGNORE INTO events
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (event_id, name, date, city, country, source))
+    venues = event.get("_embedded", {}).get("venues", [])
+    if venues:
+        venue_data = venues[0]
+        venue = venue_data.get("name", "")
+        city = venue_data.get("city", {}).get("name", "")
+        country = venue_data.get("country", {}).get("name", "")
 
-    except Exception:
-        pass
+    genre = ""
+    subgenre = ""
 
-# ---------------------------
+    classifications = event.get("classifications", [])
+    if classifications:
+        genre = classifications[0].get("genre", {}).get("name", "")
+        subgenre = classifications[0].get("subGenre", {}).get("name", "")
+
+    images = event.get("images", [])
+    image = images[0].get("url", "") if images else ""
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO events
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        event_id,
+        name,
+        date,
+        city,
+        country,
+        venue,
+        genre,
+        subgenre,
+        description,
+        image,
+        url,
+        source
+    ))
+
+
 def fetch(params, source):
     page = 0
     total_pages = 1
@@ -72,40 +116,36 @@ def fetch(params, source):
         params["page"] = page
         params["size"] = 200
 
-        r = requests.get(BASE_URL, params=params)
-        data = r.json()
+        response = requests.get(BASE_URL, params=params)
+        data = response.json()
 
         if "_embedded" not in data:
             break
 
         events = data["_embedded"]["events"]
 
-        for e in events:
-            save_event(e, source)
+        for event in events:
+            save_event(event, source)
 
         conn.commit()
 
-        total_pages = data["page"]["totalPages"]
+        total_pages = data.get("page", {}).get("totalPages", 1)
         page += 1
 
         print(f"{source} → page {page}/{total_pages}")
 
         time.sleep(0.2)
 
-# ---------------------------
-# RUN PIPELINE
-# ---------------------------
 
-# 1. keyword-based crawl
-for kw in KEYWORDS:
+for keyword in KEYWORDS:
     fetch({
         "apikey": API_KEY,
         "classificationName": "Music",
         "countryCode": "US",
-        "keyword": kw
-    }, source=f"kw:{kw}")
+        "keyword": keyword
+    }, source=f"keyword:{keyword}")
 
-# 2. city-based crawl
+
 for city in CITIES:
     fetch({
         "apikey": API_KEY,
@@ -114,10 +154,8 @@ for city in CITIES:
         "countryCode": "US"
     }, source=f"city:{city}")
 
-# ---------------------------
-# RESULT
-# ---------------------------
+
 cursor.execute("SELECT COUNT(*) FROM events")
-print("\nTOTAL EVENTS STORED:", cursor.fetchone()[0])
+print("TOTAL EVENTS STORED:", cursor.fetchone()[0])
 
 conn.close()
