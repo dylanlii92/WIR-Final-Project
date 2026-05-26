@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Festival Finder</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <p class="tagline">US music events</p>
+            <h1>Find the perfect music event for your mood</h1>
+
+            <form id="search-form" class="search-box">
+                <input
+                    id="search-input"
+                    type="text"
+                    placeholder="Search"
+                    required
+                >
+                <button type="submit">Search</button>
+            </form>
+        </section>
+
+        <section id="status" class="status"></section>
+        <section id="results" class="results-grid"></section>
+    </main>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
