@@ -1,10 +1,11 @@
 import sqlite3
+from pathlib import Path
 
+DATABASE_PATH = Path(__file__).parent / "ticketmaster_music.db"
 
-DATABASE_PATH = "ticketmaster_music.db"
 
 STOP_WORDS = {
-    "music", "concert", "event", "festival", "show",
+    "music", "event", "show",
     "tour", "in", "near", "the", "a", "an", "for",
     "i", "want", "to", "see", "find", "me"
 }
@@ -36,6 +37,24 @@ GENRE_SYNONYMS = {
         "country"
     ]
 }
+
+
+def remove_city_from_query(query, city):
+    """
+    Removes the detected city from the query so artist/genre terms remain.
+    """
+
+    if not city:
+        return query
+
+    query_lower = query.lower()
+    city_lower = city.lower()
+
+    cleaned = query_lower.replace(city_lower, "")
+    cleaned = cleaned.replace(" in ", " ")
+    cleaned = cleaned.replace(" near ", " ")
+
+    return cleaned.strip()
 
 
 def search_events(query, city="", genres=None):
@@ -193,19 +212,3 @@ def expand_genres(query_terms, genre_terms):
     return list(set(expanded))
 
 
-def remove_city_from_query(query, city):
-    """
-    Removes the detected city from the query so artist/genre terms remain.
-    """
-
-    if not city:
-        return query
-
-    query_lower = query.lower()
-    city_lower = city.lower()
-
-    cleaned = query_lower.replace(city_lower, "")
-    cleaned = cleaned.replace(" in ", " ")
-    cleaned = cleaned.replace(" near ", " ")
-
-    return cleaned.strip()
