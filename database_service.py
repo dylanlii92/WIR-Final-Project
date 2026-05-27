@@ -211,4 +211,6 @@ def expand_genres(query_terms, genre_terms):
 
     return list(set(expanded))
 
+print("test")
+
 
