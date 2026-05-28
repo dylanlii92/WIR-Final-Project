@@ -249,7 +249,7 @@ def fallback_intent(user_query):
 
     return {
         "intent": "event_search",
-        "city": city,
+        "city": cities,
         "state": "",
         "artists": [],
         "genres": genres,
