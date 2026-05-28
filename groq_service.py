@@ -64,6 +64,7 @@ Return exactly this JSON:
 
 {{
   "cities": [],
+  "states": [],
   "artists": [],
   "genres": [],
   "subgenres": [],
@@ -130,6 +131,12 @@ def normalize_intent(data):
             c.lower().strip()
             for c in safe_list(data.get("cities"))
             if isinstance(c, str)
+        ],
+
+        "states": [
+            s.lower().strip()
+            for s in safe_list(data.get("states"))
+            if isinstance(s, str)
         ],
 
         "artists": [
@@ -219,6 +226,7 @@ def fallback_intent(user_query):
     return {
         "intent": "event_search",
         "city": city,
+        "state": "",
         "artists": [],
         "genres": genres,
         "subgenres": [],
