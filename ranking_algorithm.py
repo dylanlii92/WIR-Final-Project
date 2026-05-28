@@ -87,6 +87,7 @@ def search_events(query, intent):
         criteria_met_count = 0
 
         intent_cities = [c.lower() for c in intent.get("cities", [])]
+        intent_states = [s.lower() for s in intent.get("states", [])]
         intent_artists = [a.lower() for a in intent.get("artists", [])]
         intent_genres = [g.lower() for g in intent.get("genres", [])]
         intent_subgenres = [s.lower() for s in intent.get("subgenres", [])]
@@ -103,6 +104,16 @@ def search_events(query, intent):
                 bonus_details["city_match"] = 0.5
                 city_matched = True
         if city_matched:
+            criteria_met_count += 1
+        
+        # Check State
+        state_matched = False
+        for state in intent_states:
+            if state in meta["state"].lower():
+                multiplier += 0.4
+                bonus_details["state_match"] = 0.4
+                state_matched = True
+        if state_matched:
             criteria_met_count += 1
 
         # Check Artiste
@@ -177,6 +188,7 @@ def search_events(query, intent):
             "artist": meta["artist"],
             "date": meta["date"],
             "city": meta["city"],
+            "state": meta["state"],
             "venue": meta["venue"],
             "genre": meta["genre"],
             "subgenre": meta["subgenre"],
@@ -240,6 +252,8 @@ Artist: {e['artist']}
 Genre: {e['genre']}
 Subgenre: {e['subgenre']}
 City: {e['city']}
+State: {e['state']}
+Date: {e['date']}
 Description: {e['description'][:200]}
 """
 

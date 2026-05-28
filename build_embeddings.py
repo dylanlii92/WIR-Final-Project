@@ -7,7 +7,7 @@ from pathlib import Path
 # PATHS
 # -------------------------
 
-DB_PATH = Path("ticketmaster_music.db")
+DB_PATH = Path("ticketmaster_music_v1.db")
 
 DOCS_PATH = Path("docs.npy")
 EMB_PATH = Path("embeddings.npy")
@@ -34,6 +34,7 @@ cursor.execute("""
         artist,
         date,
         city,
+        state,
         venue,
         genre,
         subgenre,
@@ -68,6 +69,7 @@ for r in rows:
         safe(r["artist"]),
         safe(r["date"]),
         safe(r["city"]),
+        safe(r["state"]),
         safe(r["venue"]),
         safe(r["genre"]),
         safe(r["subgenre"]),
@@ -84,6 +86,7 @@ for r in rows:
         "artist": safe(r["artist"]),
         "date": safe(r["date"]),
         "city": safe(r["city"]),
+        "state": safe(r["state"]),
         "venue": safe(r["venue"]),
         "genre": safe(r["genre"]),
         "subgenre": safe(r["subgenre"]),

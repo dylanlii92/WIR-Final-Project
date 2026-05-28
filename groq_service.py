@@ -4,6 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from groq import Groq
+from pandas import date_range
 
 # ----------------------------
 # LOAD ENV
@@ -31,26 +32,55 @@ def extract_search_intent(user_query):
 You are a high-precision query understanding system for a music/event search engine.
 
 CRITICAL RULES:
+- Extract all intent in lowercase.
 - Output ONLY valid JSON
 - Do NOT use markdown
-- You can try to infer missing information (for example: if the artist is Shakira, the genre is likely pop/latin. If the query mentions "me and my girlfriend", field "attending" is likely "couple", and so on), but only if it's very obvious. Otherwise, leave it blank.
 - Remove filler/slang words (yo, man, bro, help me, etc.)
+- Do not only use examples given in the prompt, be creative and adapt to the query. 
+- You are more than welcome to infer some fields, yet YOU MUST NOT fabricate information. If you are really not sure, it's safer to leave a field empty than to hallucinate.
+
+CITIES RULES:
+- Always extract city names in lowercase (e.g., "new york", "los angeles", "chicago"). 
+- If only the state is mentioned without a city, leave the cities list empty and rely on the states field.
+
+STATES RULES:
+- For the 'states' field, extract ONLY the official 2-letter United States state code (e.g., 'CA' for California, 'NY' for New York, 'IL' for Illinois). Never return the full state name or colloquial abbreviations.
+- If only the city is mentioned, populate the "states field based on a city-to-state mapping
+
+ARTISTS RULES:
+- If you are not sure if a term is an artist, you can try to search on the web to confirm. If it remains ambiguous, it's safer to leave it out of the artists list.
+- Be careful not to mix up artist names with genres or keywords. For example, "The Weeknd" is an artist, while "weekend" is a common word. Also, rap artists can sometimes have "rapper" in their name.
+
+GENRES/SUBGENRES RULES:
+-  If a term is ambiguous (e.g., "rock" could be a genre or a verb), use your best judgment based on context. If unsure, it's safer to leave it out.
+- For subgenres, be specific if possible (e.g., "alternative rock" instead of just "rock") but only if it's clear from the query.
+- Try not to mistake artist names/ venues for genres. If unsure, use context clues or search the web to confirm.
+
+MOOD RULES:
+- This is more subjective, but try as much as you can to infer a mood to every query.
+- Most common moods include: chill, party, sad, happy, energetic, romantic, family-friendly, chaotic, etc.
+- Do not only rely on explicit words, the overall vocab and tone of the query can also give clues about the mood. Eg: "I am not feeling to great atm but I want to listen to some live music" -> mood is likely "sad" or "chill" even if those words are not explicitly mentioned.
+
+EVENT TYPE RULES:
+- Common event types include: concert, festival, club night, open mic, karaoke, choir practice, etc. But be creative and adapt to the query. For example, "Are there any live music shows in NYC this weekend?" -> event type is likely "concert" or "live music show"
+
+
+ATTENDING RULES:
+- Four main categories would be "Alone", "With friends", "With a date", "Family", yet this list is not exhaustive. If nothing is mentioned, leave it empty, it's not the most critical field.
+- Sometimes categories are named implicitly, with slang... For example, "with my uncle and my cousin" -> "family",  "with my buddies/crew/squad" -> "with friends"...
 
 TIME RULES:
-- Convert relative time (this weekend, tomorrow, next Saturday)
-- Convert absolute dates (30 May, May 30) into ISO format: YYYY-MM-DD if possible. If not mentioned explicitly, year is always 2026
-- If both exist, keep both
+- ALL THE EVENTS ARE IN 2026. Use this as a reference when inferring time ranges for relative time expressions.
+- Always return tuples with first the beginning and then the end of the time range. Both elements must be written with absolute timestamps with ISO format (YYYY-MM-DD). Use internal calendar and common sense to infer the exact dates for relative time expressions like "this weekend", "next week", "tomorrow", "in 3 days".
+- If the query does not mention the day but only the month (eg: "any concerts in NYC in December"), return (2026-12-01, 2026-12-31)
+- If the query does not mention the month but only the season (eg: "any concerts in NYC this summer"), return the corresponding months for summer (2026-06-01, 2026-08-31)
 
-KEYWORDS RULES:S
-- Keep only meaningful descriptive terms
-- Remove slang (lit, fire, yo, etc.)
-- Remove filler words
+KEYWORDS RULES:
+- Extract any other relevant keyword that could help with search/ranking, even if it's not explicitly
+- This is the most flexible field, try to extract as much information as possible from the query to help the ranking algorithm, but be careful not to hallucinate or include irrelevant filler words. Use your best judgment and adapt to the query.
 
-EVENT TYPES:
-- rave, techno party, concert, festival, nightlife, club event...
 
-ATTENDING:
-- alone, friends, couple, family, etc.
+
 
 Return structured JSON only.
 """
@@ -64,17 +94,15 @@ Return exactly this JSON:
 
 {{
   "cities": [],
+  "states": [],
   "artists": [],
   "genres": [],
   "subgenres": [],
   "mood": [],
   "keywords": [],
-  "event_type": "",
-  "attending": "",
-  "time": {{
-    "relative": "",
-    "absolute": ""
-  }}
+  "event_type": [],
+  "attending": [],
+  "time": []
 }}
 """
 
@@ -132,6 +160,12 @@ def normalize_intent(data):
             if isinstance(c, str)
         ],
 
+        "states": [
+            s.lower().strip()       
+            for s in safe_list(data.get("states"))
+            if isinstance(s, str)   
+        ],
+
         "artists": [
             a.lower().strip()
             for a in safe_list(data.get("artists"))
@@ -162,14 +196,23 @@ def normalize_intent(data):
             if isinstance(k, str)
         ],
 
-        "event_type": (data.get("event_type") or "").lower().strip(),
+        "event_type": [
+            e.lower().strip()
+            for e in safe_list(data.get("event_type"))
+            if isinstance(e, str)
+        ],
 
-        "attending": (data.get("attending") or "").lower().strip(),
+        "attending": [
+            a.lower().strip()
+            for a in safe_list(data.get("attending"))
+            if isinstance(a, str)
+        ],
 
-        "time": {
-            "relative": (data.get("time") or {}).get("relative", ""),
-            "absolute": (data.get("time") or {}).get("absolute", "")
-        }
+        "time": [
+            date_tuple 
+            for date_tuple in safe_list(data.get("time"))
+            if isinstance(date_tuple, list) and len(date_tuple) == 2
+        ]
     }
 
 # ----------------------------
