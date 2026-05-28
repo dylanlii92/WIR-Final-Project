@@ -4,27 +4,27 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
-# -------------------------
+# ---------------------------------------------------------
 # LOAD PRECOMPUTED DATA
-# -------------------------
-
-DOCS = np.load("docs.npy", allow_pickle=True)
-EMBEDDINGS = np.load("embeddings.npy")
-METADATA = np.load("metadata.npy", allow_pickle=True)
+# ---------------------------------------------------------
+# Load the vectorized representation of the Ticketmaster catalog
+DOCS = np.load("docs.npy", allow_pickle=True)          # Textual documents used for BM25 indexing
+EMBEDDINGS = np.load("embeddings.npy")                # Dense vectors used for Semantic/Vector Search
+METADATA = np.load("metadata.npy", allow_pickle=True)  # Structured database fields (name, date, city, etc.)
 
 if len(DOCS) == 0:
-    raise ValueError("docs.npy is empty")
+    raise ValueError("docs.npy is empty. Please run your embedding generator script first.")
 
-# -------------------------
-# MODEL (for query embedding only)
-# -------------------------
-
+# ---------------------------------------------------------
+# EMBEDDING MODEL DEFINITION
+# ---------------------------------------------------------
+# Lightweight and fast bi-encoder to map the search query into the same vector space
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# -------------------------
-# TOKENIZATION
-# -------------------------
-
+# ---------------------------------------------------------
+# TOKENIZATION & TEXT CLEANING
+# ---------------------------------------------------------
+# Stopwords filtering out transactional and generic search terms to optimize keyword matching
 STOP_WORDS = {
     "music", "event", "show", "tour",
     "in", "near", "the", "a", "an",
@@ -33,37 +33,43 @@ STOP_WORDS = {
 }
 
 def tokenize(text: str):
+    """
+    Splits string into lowercase tokens and drops non-informative stopwords.
+    """
     return [
         t for t in text.lower().split()
         if t not in STOP_WORDS
     ]
 
-# -------------------------
-# BM25 INDEX
-# -------------------------
-
+# ---------------------------------------------------------
+# INITIALIZE KEYWORD SEARCH INDEX (BM25)
+# ---------------------------------------------------------
+# Build the sparse matrix index on the preloaded documents
 BM25 = BM25Okapi([tokenize(doc) for doc in DOCS])
 
-# -------------------------
-# MAIN SEARCH
-# -------------------------
-
+# ---------------------------------------------------------
+# MAIN SEARCH & HYBRID TIERING ENGINE
+# ---------------------------------------------------------
 def search_events(query, intent):
-
+    """
+    Executes a hybrid search combining sparse (BM25) and dense (Embeddings) scores,
+    applies business logic constraints (Tiers matching rules), and triggers an LLM reranker.
+    """
     retrieval_query = query.lower().strip()
 
     if not retrieval_query:
         return []
 
+    # Tokenize query for the BM25 statistical relevance formula
     query_tokens = tokenize(retrieval_query)
 
-    # 1. Calcul et normalisation du score BM25 (0.0 à 1.0)
+    # 1. Compute and normalize BM25 keyword scores to a [0.0 - 1.0] range
     bm25_scores = BM25.get_scores(query_tokens)
     max_bm25 = np.max(bm25_scores) if len(bm25_scores) > 0 else 0
     if max_bm25 > 0:
         bm25_scores = bm25_scores / max_bm25
 
-    # 2. Calcul du score sémantique (Dense Embedding)
+    # 2. Compute Semantic/Dense score using Cosine Similarity via Dot Product
     query_emb = model.encode(
         retrieval_query,
         normalize_embeddings=True
@@ -72,20 +78,24 @@ def search_events(query, intent):
 
     all_scored_events = []
 
-    # 3. Boucle de scoring hybride + comptage des critères
+    # 3. Iterate through every catalog item to compute hybrid baseline and score boosts
     for i in range(len(DOCS)):
 
         bm25_part = float(bm25_scores[i])
         emb_part = float(emb_scores[i])
+        
+        # Linear combination: 75% keyword exactness, 25% semantic contextual meaning
         base_score = 0.75 * bm25_part + 0.25 * emb_part
 
         meta = METADATA[i]
         multiplier = 1.0
         bonus_details = {}
         
-        # --- COMPTEUR DE CRITÈRES STRICTS ---
+        # --- STRICT CRITERIA COUNTER (Tier Sorting Flag) ---
+        # Keeps track of how many essential user constraints are perfectly satisfied
         criteria_met_count = 0
 
+        # Safely extract entities parsed from the LLM Search Intent Extraction layer
         intent_cities = [c.lower() for c in intent.get("cities", [])]
         intent_states = [s.lower() for s in intent.get("states", [])]
         intent_artists = [a.lower() for a in intent.get("artists", [])]
@@ -93,10 +103,10 @@ def search_events(query, intent):
         intent_subgenres = [s.lower() for s in intent.get("subgenres", [])]
         
         time_intent = intent.get("time", {})
-        rel_time = time_intent.get("relative", "").lower() if isinstance(time_intent, dict) else ""
-        abs_time = time_intent.get("absolute", "").lower() if isinstance(time_intent, dict) else ""
+        start_target = time_intent.get("start", "")
+        end_target = time_intent.get("end", "")
 
-        # Check Ville
+        # ---- RULE 1: City Check ----
         city_matched = False
         for city in intent_cities:
             if city in meta["city"].lower():
@@ -106,7 +116,7 @@ def search_events(query, intent):
         if city_matched:
             criteria_met_count += 1
         
-        # Check State
+        # ---- RULE 2: State Code Check ----
         state_matched = False
         for state in intent_states:
             if state in meta["state"].lower():
@@ -116,7 +126,7 @@ def search_events(query, intent):
         if state_matched:
             criteria_met_count += 1
 
-        # Check Artiste
+        # ---- RULE 3: Performer/Artist Check ----
         artist_matched = False
         for artist in intent_artists:
             if artist in meta["artist"].lower():
@@ -126,7 +136,7 @@ def search_events(query, intent):
         if artist_matched:
             criteria_met_count += 1
 
-        # Check Genre
+        # ---- RULE 4: Main Music Genre Check ----
         genre_matched = False
         for genre in intent_genres:
             if genre in (meta["genre"] + " " + meta["subgenre"]).lower():
@@ -136,31 +146,32 @@ def search_events(query, intent):
         if genre_matched:
             criteria_met_count += 1
 
-        # Check Subgenre
+        # ---- RULE 5: Specific Subgenre Check ----
         subgenre_matched = False
         for subgenre in intent_subgenres:
             if subgenre in (meta["genre"] + " " + meta["subgenre"]).lower():
                 multiplier += 0.3
                 bonus_details["subgenre_match"] = 0.4
                 subgenre_matched = True
-        if subgenre_matched and not genre_matched: # Évite de double-compter si genre et subgenre match la même chose
+        # Avoid double-counting criterion if genre and subgenre matched the same keyword token
+        if subgenre_matched and not genre_matched:
             criteria_met_count += 1
 
-        # Check Date / Temps
-        event_date = meta["date"].lower()
+        # ---- RULE 6: Absolute Date / Time Window Check ----
+        event_date = meta["date"] # Expected format from database structure: "YYYY-MM-DD"
         time_matched = False
-        if abs_time and (abs_time in event_date or abs_time in DOCS[i]):
-            multiplier += 0.5
-            bonus_details["absolute_time_match"] = 0.3
-            time_matched = True
-        elif rel_time and (rel_time in event_date or rel_time in DOCS[i]):
-            multiplier += 0.3
-            bonus_details["relative_time_match"] = 0.2
-            time_matched = True
+        
+        if start_target and end_target and event_date:
+            # Check if the catalog event falls within the bounds of the extracted dates
+            if start_target <= event_date <= end_target:
+                multiplier += 0.5
+                bonus_details["date_window_match"] = 0.5
+                time_matched = True
+                
         if time_matched:
             criteria_met_count += 1
 
-        # Bonus secondaires (Mots-clés, Humeurs) -> Ne comptent pas comme critères stricts mais boostent le score
+        # ---- BONUS LAYERS (Soft criteria - boost scores without altering strict tiers) ----
         for keyword in intent.get("keywords", []):
             if keyword.lower() in DOCS[i]:
                 multiplier += 0.1
@@ -171,12 +182,14 @@ def search_events(query, intent):
                 multiplier += 0.2
                 bonus_details["mood_match"] = 0.2
 
+        # Final compounding score multiplication
         final_score = float(base_score * multiplier)
 
+        # Append payload schema required for frontend injection and debug logs
         all_scored_events.append({
             "id": i,
             "score": final_score,
-            "criteria_count": criteria_met_count, # Stockage du nombre de critères
+            "criteria_count": criteria_met_count,
             "score_breakdown": {
                 "bm25_raw": bm25_part,
                 "embedding_raw": emb_part,
@@ -197,18 +210,18 @@ def search_events(query, intent):
             "url": meta["url"]
         })
 
-    # --- TRI PAR TIERS STRICTS (Ta nouvelle méthodologie) ---
-    # On trie d'ABORD par le nombre de critères satisfaits (descending)
-    # PUIS en cas d'égalité par le score de pondération final (descending)
+    # --- TWO-STEP STRICT TIERS SORTING ---
+    # Primary sorting key: Number of satisfied core criteria (descending)
+    # Secondary sorting key: Mathematical hybrid baseline weight (descending)
     all_scored_events.sort(key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
 
-    # On sélectionne notre Top 20 de candidats pour le LLM basé sur ce tri ultra robuste
+    # Slice the top 20 best candidates out of the matrix to process through LLM evaluation
     candidates = all_scored_events[:20]
 
-    # 4. Re-ranking par le LLM (uniquement sur les meilleurs Tiers disponibles)
+    # 4. Perform localized LLM contextual re-ranking on the high-quality candidates subset
     reranked = rerank_events(query, intent, candidates)
 
-    # --- DETAILED SCORE DISPLAY IN CONSOLE ---
+    # --- COMPREHENSIVE SCOREBOARD PRINT IN CONSOLE ---
     print("\n" + "="*60)
     print(f"📊 SCORE BREAKDOWN FOR QUERY: '{query}'")
     print("="*60)
@@ -239,10 +252,19 @@ def search_events(query, intent):
     return reranked
 
 
+# ---------------------------------------------------------
+# LLM STEP-2 CONTEXTUAL RE-RANKER
+# ---------------------------------------------------------
 def rerank_events(query, intent, candidates):
+    """
+    Leverages a reasoning model to cross-examine and score candidates, 
+    acting as a logical filter against location and genre hallucinations.
+    """
+    # Safety Check: If no candidates reached this stage, return an empty list immediately
     if not candidates:
         return []
 
+    # Flatten the payload into an optimized textual manifest to save LLM tokens
     events_text = ""
     for i, e in enumerate(candidates):
         events_text += f"""
@@ -280,6 +302,11 @@ Events list:
 {events_text}
 """
 
+    # Initialize all candidates with an LLM score of 0 before making the API call
+    # This prevents incomplete states if the API fails midway or crashes
+    for e in candidates:
+        e["llm_score"] = 0
+
     try:
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -288,19 +315,24 @@ Events list:
             response_format={"type":"json_object"}
         )
 
-        scores = json.loads(response.choices[0].message.content)["scores"]
+        # Parse output safely
+        response_content = json.loads(response.choices[0].message.content)
+        scores = response_content.get("scores", [])
 
+        # Map scores dynamically
         for i, e in enumerate(candidates):
             if i < len(scores):
-                llm_score_normalized = scores[i] / 10.0
+                llm_score_normalized = float(scores[i]) / 10.0
                 e["llm_score"] = scores[i]
                 e["score"] += llm_score_normalized
-            else:
-                e["llm_score"] = 0
-                
-    except Exception as e:
-        print("Error during LLM reranking, keeping initial scores:", e)
-        for e in candidates:
-            e["llm_score"] = 0
 
-    return sorted(candidates, key=lambda x: (x["criteria_count"], x["score"]), reverse=True)[:8]
+    except Exception as error:
+        # If Groq/Llama crashes, timeouts, or sends bad JSON, we safely catch it here
+        print(f"⚠️ Error during LLM reranking: {error}. Falling back to initial algorithmic scores.")
+
+    # --- CRITICAL FIX: ABSOLUTE AND UNCONDITIONAL RETURN ---
+    # This line MUST be completely outside the try/except block (indented to the left).
+    # It guarantees that whatever happens up there, a valid list is returned to app.py.
+    final_sorted_list = sorted(candidates, key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
+    
+    return final_sorted_list[:8]
