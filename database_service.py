@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-DATABASE_PATH = Path(__file__).parent / "ticketmaster_music.db"
+DATABASE_PATH = Path(__file__).parent / "ticketmaster_music_v1.db"
 
 
 STOP_WORDS = {
