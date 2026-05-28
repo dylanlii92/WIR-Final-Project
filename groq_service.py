@@ -177,53 +177,44 @@ def normalize_intent(data):
 # ----------------------------
 def fallback_intent(user_query):
     """
-    Simple rule-based fallback if Groq fails.
+    Simple rule-based fallback réécrit pour correspondre 
+    parfaitement à la structure attendue.
     """
-
     query_lower = user_query.lower()
 
     known_cities = [
         "new york", "los angeles", "chicago", "houston",
         "miami", "seattle", "boston", "atlanta",
-        "san francisco", "las vegas", "dallas", "denver",
-        "phoenix", "portland", "orlando", "san diego",
-        "washington", "philadelphia", "austin", "nashville"
+        "san francisco", "las vegas", "dallas", "denver"
     ]
-
-    city = ""
-    for c in known_cities:
-        if c in query_lower:
-            city = c
-            break
+    # 'cities' doit être une liste
+    cities = [c for c in known_cities if c in query_lower]
 
     known_genres = [
         "kpop", "pop", "rock", "jazz", "edm", "electronic",
-        "indie", "hip hop", "country", "classical", "metal",
-        "r&b", "soul", "latin"
+        "indie", "hip hop", "country", "classical"
     ]
-
     genres = [g for g in known_genres if g in query_lower]
 
     known_moods = ["chill", "party", "sad", "energetic", "happy"]
-    mood = ""
-    for m in known_moods:
-        if m in query_lower:
-            mood = m
-            break
+    moods = [m for m in known_moods if m in query_lower]
 
-    keyword = user_query.lower()
-
-    if city:
-        keyword = keyword.replace(city, "")
+    # Nettoyage rapide des mots-clés
+    keywords = user_query.lower().split()
+    for c in cities:
+        if c in keywords: keywords.remove(c)
 
     return {
-        "intent": "event_search",
-        "city": city,
+        "cities": cities,
         "artists": [],
         "genres": genres,
         "subgenres": [],
-        "mood": mood,
-        "keywords": keyword.split(),
-        "time_filter": "",
-        "popularity_bias": "any"
+        "mood": moods,
+        "keywords": keywords,
+        "event_type": "",
+        "attending": "",
+        "time": {
+            "relative": "",
+            "absolute": ""
+        }
     }

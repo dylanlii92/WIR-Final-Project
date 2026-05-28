@@ -1,6 +1,6 @@
 from flask import Flask, render_template, jsonify, request
 
-from database_service import search_events
+from ranking_algorithm import search_events
 from groq_service import extract_search_intent
 
 app = Flask(__name__)
@@ -13,30 +13,40 @@ def home():
 
 @app.route("/ask")
 def ask():
-    user_query = request.args.get("q", "")
+
+    user_query = request.args.get("q", "").strip()
 
     if not user_query:
-        return jsonify({
-            "results": []
-        })
+        return jsonify({"results": []})
+
+    # -------------------------
+    # INTENT EXTRACTION
+    # -------------------------
 
     intent = extract_search_intent(user_query)
 
-    search_keyword = intent.get("keyword") or user_query
-    search_city = intent.get("city", "")
-    search_genres = intent.get("genres", [])
+    if not isinstance(intent, dict):
+        intent = {
+            "keywords": [user_query],
+            "artists": [],
+            "genres": [],
+            "subgenres": [],
+            "city": ""
+        }
 
-    results = search_events(
-    query=user_query,
-    city=intent.get("city", ""),
-    genres=intent.get("genres", [])
-)
+    # -------------------------
+    # RANKING
+    # -------------------------
 
-    for event in results:
-        event["explanation"] = (
-            "This event matches your search based on its title, "
-            "genre, location, venue, or description."
-        )
+    results = search_events(user_query, intent)
+
+    # -------------------------
+    # RESPONSE
+    # -------------------------
+
+    for r in results:
+        r["explanation"] = f"score={r['score']:.2f}"
+
 
     return jsonify({
         "query": user_query,
@@ -46,4 +56,4 @@ def ask():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
