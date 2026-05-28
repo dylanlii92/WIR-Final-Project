@@ -10,10 +10,11 @@ load_dotenv()
 API_KEY = os.getenv("JENNY_TICKETMASTER_API_KEY")
 BASE_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 
+# Connexion à ta base v1
 conn = sqlite3.connect("ticketmaster_music_v1.db")
 cursor = conn.cursor()
 
-# Création de la table (rétrocompatible à 100%)
+# Création de la table (100% rétrocompatible avec ta structure initiale)
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
@@ -33,7 +34,7 @@ CREATE TABLE IF NOT EXISTS events (
 """)
 conn.commit()
 
-# Liste des 40 États US majeurs pour un maillage complet
+# Liste des 40 États US majeurs pour un maillage complet du territoire
 STATES = [
     "CA", "NY", "TX", "FL", "IL", "PA", "OH", "GA", "NC", "MI",
     "NJ", "VA", "WA", "AZ", "MA", "TN", "IN", "MD", "MO", "WI",
@@ -42,10 +43,12 @@ STATES = [
 ]
 
 def extract_artists(event):
+    """ Extrait les noms d'artistes depuis les attractions du JSON Ticketmaster """
     attractions = event.get("_embedded", {}).get("attractions", [])
     return ", ".join([a.get("name") for a in attractions if a.get("name")])
 
 def save_event(event, source):
+    """ Extrait et sauvegarde un événement unique en base de données """
     event_id = event.get("id")
     name = event.get("name")
     artist = extract_artists(event)
@@ -86,13 +89,13 @@ def save_event(event, source):
 def fetch_with_retry(params, source):
     """
     Télécharge toutes les pages d'une requête en gérant le Rate Limiting (429)
-    et en surveillant la barrière des 1000 items de Ticketmaster.
+    et en surveillant la barrière physique des 1000 items de Ticketmaster.
     """
     page = 0
     total_pages = 1
 
     while page < total_pages:
-        # Sécurité au cas où un bloc dépasse quand même les 1000 items (ex: festival massif)
+        # Sécurité : Ticketmaster bloque l'accès au catalogue au-delà de 1000 items par filtre
         if page * 200 >= 1000:
             print(f"   -> Deep-paging barrier imminent (1000 items limit) for {source}. Snipping.")
             break
@@ -103,11 +106,11 @@ def fetch_with_retry(params, source):
         try:
             response = requests.get(BASE_URL, params=params)
             
-            # Gestion du Rate Limiting (HTTP 429 Too Many Requests)
+            # Gestion intelligente du Rate Limiting (HTTP 429 Too Many Requests)
             if response.status_code == 429:
                 print("⚠️ HTTP 429 detected. Sleeping for 4 seconds to cooldown...")
                 time.sleep(4)
-                continue  # Relance la même page après la pause
+                continue  # Relance la même page exacte après la pause
                 
             if response.status_code != 200:
                 print(f"❌ Error {response.status_code}, skipping page {page}")
@@ -128,31 +131,47 @@ def fetch_with_retry(params, source):
             page += 1
             print(f"   [{source}] Page {page}/{total_pages}")
             
-            # Légère pause pour respecter le quota de requêtes par seconde (QPS)
+            # Pause réglementaire pour respecter les Quotas par seconde (QPS)
             time.sleep(0.25)
 
         except Exception as e:
             print(f"⚠️ Exception occurred: {e}. Retrying in 2 seconds...")
             time.sleep(2)
 
-# --- CONFIGURATION DES INTERVALLES FENÊTRES DE 4 JOURS ---
+# --- CONFIGURATION DYNAMIQUE JUSQU'À FIN 2026 ---
 
 start_date = datetime.now()
+end_target_date = datetime(2026, 12, 31, 23, 59, 59)
+
+# Calcul automatique de la distance temporelle en jours
+days_remaining = (end_target_date - start_date).days
+# Division par fenêtres de 4 jours pour obtenir le nombre de blocs requis
+total_chunks_needed = (days_remaining // 4) + 1
+
 date_intervals = []
 
-# 38 blocs de 4 jours = couverture complète et ultra-dense sur les 5 prochains mois (~152 jours)
-for i in range(38): 
+for i in range(total_chunks_needed): 
     window_start = start_date + timedelta(days=i*4)
     window_end = window_start + timedelta(days=3)
+    
+    # Si le bloc déborde sur 2027, on le tronque pile au 31 décembre 2026
+    if window_end > end_target_date:
+        window_end = end_target_date
+        
     date_intervals.append((
         window_start.strftime("%Y-%m-%dT00:00:00Z"),
         window_end.strftime("%Y-%m-%dT23:59:59Z")
     ))
+    
+    if window_start >= end_target_date:
+        break
 
-print(f"🚀 Starting High-Density Scraper (4-day windows strategy)...")
+print(f"🚀 Starting High-Density Scraper (Target: December 31, 2026)...")
+print(f"Calendar span: {days_remaining} days to harvest.")
 print(f"Total workload: {len(STATES)} states x {len(date_intervals)} windows = {len(STATES)*len(date_intervals)} chunks to scan.")
+print("="*60)
 
-# --- BOUCLE PRINCIPALE DE COLLECTE ---
+# --- BOUCLE PRINCIPALE DE COLLECTE CHIRURGICALE ---
 
 for state in STATES:
     print(f"\n🌍 SCANNING STATE: {state}")
@@ -167,21 +186,24 @@ for state in STATES:
             "endDateTime": end_dt
         }
         
-        # Format de la source : Ex "CA_06-01_to_06-04"
+        # Format du tag source stocké en BDD : Ex "CA_06-01_to_06-04"
         short_source = f"{state}_{start_dt[5:10]}_to_{end_dt[5:10]}"
         fetch_with_retry(params, source=short_source)
 
-    # --- COMPTEUR EN TEMPS RÉEL (Ajouté après chaque État complet
+    # --- COMPTEUR EN TEMPS RÉEL APRES CHAQUE ÉTAT ---
     cursor.execute("SELECT COUNT(*) FROM events")
     current_total = cursor.fetchone()[0]
-    print(f"📊 [PROGRESS] Finished State {state} | Total unique events in DB now: {current_total}")
-    print("-" * 50)
+    print(f"\n📊 [PROGRESS] Finished State {state}")
+    print(f"📈 Total unique music events in BDD now: {current_total}")
+    print("-" * 60)
 
-# Compteur final réel en base de données
+# --- FIN DU SCRIPT ---
 cursor.execute("SELECT COUNT(*) FROM events")
-print("\n" + "="*50)
-print("🎯 SCRAPING MASS COMPLETED CONCURRENTLY!")
-print("TOTAL UNIQUE MUSIC EVENTS IN DB NOW:", cursor.fetchone()[0])
-print("="*50)
+final_total = cursor.fetchone()[0]
+
+print("\n" + "="*60)
+print("🎯 MASS SCRAPING MISSION COMPLETED!")
+print(f"FINAL VOLUME RECORDED IN DATABASE: {final_total} UNIQUE EVENTS")
+print("="*60 + "\n")
 
 conn.close()

@@ -161,9 +161,9 @@ def normalize_intent(data):
         ],
 
         "states": [
-            s.lower().strip()       
+            s.lower().strip()
             for s in safe_list(data.get("states"))
-            if isinstance(s, str)   
+            if isinstance(s, str)
         ],
 
         "artists": [
@@ -248,7 +248,9 @@ def fallback_intent(user_query):
         if c in keywords: keywords.remove(c)
 
     return {
-        "cities": cities,
+        "intent": "event_search",
+        "city": city,
+        "state": "",
         "artists": [],
         "genres": genres,
         "subgenres": [],
