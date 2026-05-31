@@ -96,15 +96,28 @@ def search_events(query, intent):
         criteria_met_count = 0
 
         # Safely extract entities parsed from the LLM Search Intent Extraction layer
+        intent_artists = [a.lower() for a in intent.get("artists", [])]
         intent_cities = [c.lower() for c in intent.get("cities", [])]
         intent_states = [s.lower() for s in intent.get("states", [])]
-        intent_artists = [a.lower() for a in intent.get("artists", [])]
+        intent_titles = [t.lower() for t in intent.get("titles", [])]
         intent_genres = [g.lower() for g in intent.get("genres", [])]
         intent_subgenres = [s.lower() for s in intent.get("subgenres", [])]
         
         time_intent = intent.get("time", {})
         start_target = time_intent.get("start", "")
         end_target = time_intent.get("end", "")
+
+        exclusions = intent.get("exclusions", {})
+        exclusion_cities = [c.lower() for c in exclusions.get("cities", [])]
+        exclusion_states = [s.lower() for s in exclusions.get("states", [])]
+        exclusion_artists = [a.lower() for a in exclusions.get("artists", [])]
+        exclusion_titles = [t.lower() for t in exclusions.get("titles", [])]
+        exclusion_genres = [g.lower() for g in exclusions.get("genres", [])]
+        exclusion_subgenres = [s.lower() for s in exclusions.get("subgenres", [])]
+        exclusion_time = exclusions.get("time", {})
+        exclusion_start = exclusion_time.get("start", "")
+        exclusion_end = exclusion_time.get("end", "")
+
 
         # ---- RULE 1: City Check ----
         city_matched = False
@@ -120,13 +133,23 @@ def search_events(query, intent):
         state_matched = False
         for state in intent_states:
             if state in meta["state"].lower():
-                multiplier += 0.4
-                bonus_details["state_match"] = 0.4
+                multiplier += 0.3
+                bonus_details["state_match"] = 0.3
                 state_matched = True
         if state_matched:
             criteria_met_count += 1
 
-        # ---- RULE 3: Performer/Artist Check ----
+        # ---- RULE 3: Event Title Check ----
+        title_matched = False
+        for title in intent_titles: 
+            if title in meta["name"].lower():
+                multiplier += 1.0
+                bonus_details["title_match"] = 1.0
+                title_matched = True
+        if title_matched:
+            criteria_met_count += 1 
+
+        # ---- RULE 4: Performer/Artist Check ----
         artist_matched = False
         for artist in intent_artists:
             if artist in meta["artist"].lower():
@@ -136,54 +159,87 @@ def search_events(query, intent):
         if artist_matched:
             criteria_met_count += 1
 
-        # ---- RULE 4: Main Music Genre Check ----
+        # ---- RULE 5: Main Music Genre Check ----
         genre_matched = False
         for genre in intent_genres:
             if genre in (meta["genre"] + " " + meta["subgenre"]).lower():
                 multiplier += 0.3
-                bonus_details["genre_match"] = 0.4
+                bonus_details["genre_match"] = 0.5
                 genre_matched = True
         if genre_matched:
             criteria_met_count += 1
 
-        # ---- RULE 5: Specific Subgenre Check ----
+        # ---- RULE 6: Specific Subgenre Check ----
         subgenre_matched = False
         for subgenre in intent_subgenres:
             if subgenre in (meta["genre"] + " " + meta["subgenre"]).lower():
                 multiplier += 0.3
-                bonus_details["subgenre_match"] = 0.4
+                bonus_details["subgenre_match"] = 0.5
                 subgenre_matched = True
         # Avoid double-counting criterion if genre and subgenre matched the same keyword token
-        if subgenre_matched and not genre_matched:
+        if subgenre_matched:
             criteria_met_count += 1
 
-        # ---- RULE 6: Absolute Date / Time Window Check ----
-        event_date = meta["date"] # Expected format from database structure: "YYYY-MM-DD"
+        # ---- RULE 7: Absolute Date / Time Window Check ----
+        event_date = meta.get("date", "") # Expected format: "YYYY-MM-DD"
         time_matched = False
         
+        # We check if both start and end dates are provided and not empty
         if start_target and end_target and event_date:
             # Check if the catalog event falls within the bounds of the extracted dates
             if start_target <= event_date <= end_target:
                 multiplier += 0.5
                 bonus_details["date_window_match"] = 0.5
-                time_matched = True
+                time_matched = True   
                 
         if time_matched:
             criteria_met_count += 1
-
-        # ---- BONUS LAYERS (Soft criteria - boost scores without altering strict tiers) ----
-        for keyword in intent.get("keywords", []):
-            if keyword.lower() in DOCS[i]:
-                multiplier += 0.1
-                bonus_details[f"keyword_{keyword}"] = 0.1
-
-        for mood in intent.get("mood", []):
-            if mood.lower() in DOCS[i]:
-                multiplier += 0.2
-                bonus_details["mood_match"] = 0.2
-
+                
         # Final compounding score multiplication
         final_score = float(base_score * multiplier)
+
+        is_excluded = False
+        reasons_for_exclusion = []
+
+        for exc in exclusion_cities:
+            if exc in meta["city"].lower():
+                is_excluded = True
+                reasons_for_exclusion.append(f"Excluded city match: {exc}")
+        
+        for exc in exclusion_states:
+            if exc in meta["state"].lower():
+                is_excluded = True
+                reasons_for_exclusion.append(f"Excluded state match: {exc}")
+        
+        for exc in exclusion_titles:
+            if exc in meta["name"].lower():
+                is_excluded = True
+                reasons_for_exclusion.append(f"Excluded title match: {exc}")
+        
+        for exc in exclusion_artists:
+            if exc in meta["artist"].lower():
+                is_excluded = True
+                reasons_for_exclusion.append(f"Excluded artist match: {exc}")
+        
+        for exc in exclusion_genres:
+            if exc in (meta["genre"] + " " + meta["subgenre"]).lower():
+                is_excluded = True
+                reasons_for_exclusion.append(f"Excluded genre match: {exc}")
+        
+        for exc in exclusion_subgenres:
+            if exc in (meta["genre"] + " " + meta["subgenre"]).lower():
+                is_excluded = True
+                reasons_for_exclusion.append(f"Excluded subgenre match: {exc}")
+
+        if exclusion_start and exclusion_end and event_date:
+            if exclusion_start <= event_date <= exclusion_end:
+                is_excluded = True
+                reasons_for_exclusion.append(f"Excluded date match: {event_date} falls between {exclusion_start} and {exclusion_end}")
+        
+        if is_excluded:
+            final_score = final_score * 0.05  
+            criteria_met_count = 0            
+            bonus_details["CRITICAL_MALUS"] = reasons_for_exclusion
 
         # Append payload schema required for frontend injection and debug logs
         all_scored_events.append({
@@ -221,8 +277,23 @@ def search_events(query, intent):
     # 4. Perform localized LLM contextual re-ranking on the high-quality candidates subset
     reranked = rerank_events(query, intent, candidates)
 
+# 4. Trigger Re-ranker on the top 20 candidates
+    reranked = rerank_events(query, intent, candidates)
+
+    # --- SÉPARATION STRICTE EN DEUX CATÉGORIES POUR LE FRONTEND ---
+    best_recommendations = []
+    you_may_also_like = []
+
+    for e in reranked:
+        # Condition ultra-sélective : 4 critères stricts ou plus, et maximum 3 événements
+        if e["criteria_count"] >= 4 and len(best_recommendations) < 3:
+            best_recommendations.append(e)
+        else:
+            # Tout le reste (les critères < 4 ET les débordements au-delà du top 3) va ici
+            you_may_also_like.append(e)
+
     # --- COMPREHENSIVE SCOREBOARD PRINT IN CONSOLE ---
-    print("\n" + "="*60)
+    print("\n" + "="*70)
     print(f"📊 SCORE BREAKDOWN FOR QUERY: '{query}'")
     print("="*60)
     
@@ -244,10 +315,15 @@ def search_events(query, intent):
         else:
             print("     |  Bonus Details: No bonus applied")
             
-        llm_score = e.get("llm_score", 0)
-        print(f"     |- 🤖 LLM Reranker Score: {llm_score}/10 (Added contribution: +{llm_score/10:.2f})")
+# Detailed LLM Reranker Output (Objective vs Subjective)
+        llm_total = e.get("llm_score", 0)
+        llm_obj = e.get("llm_objective", 0)
+        llm_sub = e.get("llm_subjective", 0)
+        print(f"     |- 🤖 LLM RERANKER ANALYSIS : {llm_total}/10 pts (Contribution: +{llm_total/10:.2f})")
+        print(f"        |--> 🎯 Objective Criteria Met : {llm_obj}/6 pts  (Title, Artist, City, Genre, Date)")
+        print(f"        |--> 🧠 Subjective Vibe Match  : {llm_sub}/4 pts  (Mood, Keywords, Context)")
     
-    print("="*60 + "\n")
+    print("="*70 + "\n")
 
     return reranked
 
@@ -276,15 +352,34 @@ Subgenre: {e['subgenre']}
 City: {e['city']}
 State: {e['state']}
 Date: {e['date']}
-Description: {e['description'][:200]}
+Description: {e['description']}
 """
 
     prompt = f"""
-You are a high-precision ranking expert. 
+You are a high-precision ranking expert for music events.  
 Your job is to rate how well each event matches the user's specific request.
 
 CRITICAL: 
-- Check the City, Genre, and Date carefully. If an event is in a completely different city or different genre than requested, its score should be extremely low (0 or 1), even if the description looks fun.
+- Each score must be an integer from 0 to 10, where 0 means "not relevant at all" and 10 means "perfect match".
+6 points are for the objective criteria, and 4 points are for the subjective criteria.
+
+- First thing you do check is if the event satisfies the objective criteria extracted in the intent (city, state, artist, genre, subgenre, title, time fields). 
+If an event meets none of theses criteria, it should be ranked 0 or 1. The more criteria it meets, the higher the score should be. 
+The importance of each criterion is the following: Title > Artist > City > Genre/Subgenre > State > Date.
+The maximum score for an event that meets all criteria is 6 points.
+
+- After that, you must analyze how well the event matches the subjective fields (mood, keywords, attending, event_type fields).
+To do so, you should mainly use the event description but also possibly the title (especially if the description is missing/very short).
+Do not only look for exact word matches, use your reasoning of language to determine if the event is relevant to the user's intent.
+For example, if the intent mood is "chill" and the event says "calm evening by the beach", this is a very good match. On the other hand, if the intent attending field says "with family", and the description says "only for 21++", this is a very bad match.
+You grading policy must be discriminative, only the most relevant events can get the full 4 subjective points.
+
+- The user may have expressed some exclusions in their intent (see the "exclusions" field). 
+If an event matches any of theexclusion criteria, it should be heavilily penalized in the scoring, receiving a score of 0, even if it matches lots of inclusion criteria. 
+For example, for the query "concert in june in boston, anything but jazz", if an event is in boston in june but is a jazz concert, it should get a LLM score of 0.
+You should pay attention to both OBJECTIVE and SUBJECTIVE exclusions, for example if the user says "I want to go to a chill rock concert, not too crowded", if an event has its description saying "REAL LOUD ROCK CONCERT, NOT FOR THE FAINT OF HEART", even if it matches the rock genre criteria, it should get a score of 0 because of the subjective "not too crowded" exclusion match.
+
+
 
 User query:
 {query}
@@ -292,20 +387,29 @@ User query:
 Intent parsed:
 {intent}
 
-Rate each event from 0 to 10 based on exact relevance.
-Return JSON only in this format:
+CRITICAL OUTPUT INSTRUCTIONS:
+- You MUST evaluate and return a score for EVERY single event in the list below.
+- Do not skip any event. If there are 20 events, your "events" array MUST contain exactly 20 JSON objects.
+- Use the exact integer index provided in the bracket (e.g., [0], [1], [2]...) as the "index" field.
+
+Return JSON only in this exact format structure:
 {{
-  "scores": [0,0,0,...]
+  "events": [    
+    {{"index": 0, "objective_score": 4, "subjective_score": 2, "total_score": 6}},
+    {{"index": 1, "objective_score": 6, "subjective_score": 3, "total_score": 9}},
+    {{"index": 2, "objective_score": 1, "subjective_score": 1, "total_score": 2}}
+    // ... continue for ALL items up to the last event index
+  ]
 }}
 
 Events list:
 {events_text}
 """
 
-    # Initialize all candidates with an LLM score of 0 before making the API call
-    # This prevents incomplete states if the API fails midway or crashes
     for e in candidates:
         e["llm_score"] = 0
+        e["llm_objective"] = 0
+        e["llm_subjective"] = 0
 
     try:
         response = client.chat.completions.create(
@@ -315,24 +419,30 @@ Events list:
             response_format={"type":"json_object"}
         )
 
-        # Parse output safely
         response_content = json.loads(response.choices[0].message.content)
-        scores = response_content.get("scores", [])
+        llm_events = response_content.get("events", [])
 
-        # Map scores dynamically
-        for i, e in enumerate(candidates):
-            if i < len(scores):
-                llm_score_normalized = float(scores[i]) / 10.0
-                e["llm_score"] = scores[i]
-                e["score"] += llm_score_normalized
+        # Map scores dynamically using index matching
+        for item in llm_events:
+            idx = item.get("index")
+            if idx is not None and idx < len(candidates):
+                obj = item.get("objective_score", 0)
+                sub = item.get("subjective_score", 0)
+                total = item.get("total_score", obj + sub)
+                
+                candidates[idx]["llm_score"] = total
+                candidates[idx]["llm_objective"] = obj
+                candidates[idx]["llm_subjective"] = sub
+                
+                # Normalization factor added to the final score matrix
+                candidates[idx]["score"] += float(total) / 10.0
 
     except Exception as error:
-        # If Groq/Llama crashes, timeouts, or sends bad JSON, we safely catch it here
         print(f"⚠️ Error during LLM reranking: {error}. Falling back to initial algorithmic scores.")
+        for e in candidates:
+            e["llm_score"] = 0
+            e["llm_objective"] = 0
+            e["llm_subjective"] = 0
 
-    # --- CRITICAL FIX: ABSOLUTE AND UNCONDITIONAL RETURN ---
-    # This line MUST be completely outside the try/except block (indented to the left).
-    # It guarantees that whatever happens up there, a valid list is returned to app.py.
     final_sorted_list = sorted(candidates, key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
-    
     return final_sorted_list[:8]
