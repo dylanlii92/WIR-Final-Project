@@ -20,6 +20,7 @@ def ask():
 
     if not isinstance(intent, dict) or "cities" not in intent:
         intent = {
+            "titles": [],
             "cities": [],
             "states": [],
             "artists": [],
