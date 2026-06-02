@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -14,8 +15,19 @@ if not GROQ_API_KEY:
 
 client = Groq(api_key=GROQ_API_KEY)
 
-import json
-from datetime import datetime
+def query_local_artist_genre(artist_name):
+
+    try:
+        conn = sqlite3.connect("artists_genres.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT genre FROM artists WHERE LOWER(artist) = LOWER(?);", (artist_name.strip(),))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0].lower() if row else None
+    except Exception as e:
+        print(f"⚠️Error while querying local DB for artist '{artist_name}': {e}")
+        return None
+
 
 def extract_search_intent(user_query):
     now = datetime.now()
@@ -157,7 +169,18 @@ Return exactly this JSON structure:
             data["time"] = {"start": "", "end": ""}
             
         data = normalize_intent(data)
-        print("🎯 EXTRACTED INTENT:", data)
+
+        extracted_artists = data.get("artists", [])
+        if extracted_artists:
+            data["genres"] = []   
+            for artist in extracted_artists:
+                verified_genre = query_local_artist_genre(artist)
+                
+                if verified_genre:
+                    if verified_genre not in data["genres"]:
+                        data["genres"].append(verified_genre)
+                        
+        print(data)
         return data
 
     except Exception as error:
