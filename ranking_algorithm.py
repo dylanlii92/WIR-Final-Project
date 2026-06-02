@@ -1,5 +1,5 @@
 import json
-from random import shuffle as random_shuffle
+import re
 from groq_service import client
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -15,6 +15,26 @@ METADATA = np.load("metadata.npy", allow_pickle=True)  # Structured database fie
 
 if len(DOCS) == 0:
     raise ValueError("docs.npy is empty. Please run your embedding generator script first.")
+
+KNOWN_CITIES = sorted({
+    str(meta.get("city", "")).lower().strip()
+    for meta in METADATA
+    if str(meta.get("city", "")).strip()
+}, key=len, reverse=True)
+
+KNOWN_ARTISTS = sorted({
+    str(meta.get("artist", "")).lower().strip()
+    for meta in METADATA
+    if str(meta.get("artist", "")).strip()
+}, key=len, reverse=True)
+
+CITY_TO_STATES = {}
+for meta in METADATA:
+    city = str(meta.get("city", "")).lower().strip()
+    state = str(meta.get("state", "")).lower().strip()
+
+    if city and state:
+        CITY_TO_STATES.setdefault(city, set()).add(state)
 
 # ---------------------------------------------------------
 # EMBEDDING MODEL DEFINITION
@@ -42,6 +62,50 @@ def tokenize(text: str):
         if t not in STOP_WORDS
     ]
 
+def phrase_in_query(phrase, query):
+    pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
+    return re.search(pattern, query) is not None
+
+def enrich_intent_from_query(query, intent):
+    """
+    Adds exact city and artist matches from the local catalog when the LLM intent
+    parser misses an obvious entity in the raw query.
+    """
+    if not isinstance(intent, dict):
+        intent = {}
+
+    normalized_query = query.lower().strip()
+    enriched = dict(intent)
+
+    for key in ("cities", "states", "artists"):
+        value = enriched.get(key, [])
+        enriched[key] = value if isinstance(value, list) else []
+
+    for city in KNOWN_CITIES:
+        if phrase_in_query(city, normalized_query) and city not in enriched["cities"]:
+            enriched["cities"].append(city)
+
+            states = CITY_TO_STATES.get(city, set())
+            if len(states) == 1:
+                state = next(iter(states))
+                if state not in enriched["states"]:
+                    enriched["states"].append(state)
+
+    for artist in KNOWN_ARTISTS:
+        if phrase_in_query(artist, normalized_query) and artist not in enriched["artists"]:
+            enriched["artists"].append(artist)
+
+    return enriched
+
+def sort_event_key(event):
+    return (
+        event.get("exact_query_match_count", 0),
+        event.get("artist_query_match", 0),
+        event.get("city_query_match", 0),
+        event.get("criteria_count", 0),
+        event.get("score", 0)
+    )
+
 # ---------------------------------------------------------
 # INITIALIZE KEYWORD SEARCH INDEX (BM25)
 # ---------------------------------------------------------
@@ -51,15 +115,27 @@ BM25 = BM25Okapi([tokenize(doc) for doc in DOCS])
 # ---------------------------------------------------------
 # MAIN SEARCH & HYBRID TIERING ENGINE
 # ---------------------------------------------------------
-def search_events(query, intent):
+def search_events(query, intent, limit=None, offset=0):
     """
     Executes a hybrid search combining sparse (BM25) and dense (Embeddings) scores,
     applies business logic constraints (Tiers matching rules), and triggers an LLM reranker.
     """
     retrieval_query = query.lower().strip()
+    intent = enrich_intent_from_query(retrieval_query, intent)
 
     if not retrieval_query:
-        return []
+        if limit is None:
+            return []
+
+        return {
+            "results": [],
+            "next_offset": offset,
+            "has_more": False
+        }
+
+    if limit is not None:
+        limit = max(1, int(limit))
+        offset = max(0, int(offset))
 
     # Tokenize query for the BM25 statistical relevance formula
     query_tokens = tokenize(retrieval_query)
@@ -119,6 +195,9 @@ def search_events(query, intent):
         exclusion_start = exclusion_time.get("start", "")
         exclusion_end = exclusion_time.get("end", "")
 
+        city_query_match = 0
+        artist_query_match = 0
+        exact_query_match_count = 0
 
         # ---- RULE 1: City Check ----
         city_matched = False
@@ -129,6 +208,8 @@ def search_events(query, intent):
                 city_matched = True
         if city_matched:
             criteria_met_count += 1
+            city_query_match = 1
+            exact_query_match_count += 1
         
         # ---- RULE 2: State Code Check ----
         state_matched = False
@@ -159,6 +240,8 @@ def search_events(query, intent):
                 artist_matched = True
         if artist_matched:
             criteria_met_count += 1
+            artist_query_match = 1
+            exact_query_match_count += 1
 
         # ---- RULE 5: Main Music Genre Check ----
         genre_matched = False
@@ -193,6 +276,10 @@ def search_events(query, intent):
                 
         # Final compounding score multiplication
         final_score = float(base_score * multiplier)
+
+        if intent_cities and artist_matched and not city_matched:
+            final_score = final_score * 0.35
+            bonus_details["missing_requested_city_penalty"] = -0.65
 
         is_excluded = False
         reasons_for_exclusion = []
@@ -242,6 +329,9 @@ def search_events(query, intent):
             "id": i,
             "score": final_score,
             "criteria_count": criteria_met_count,
+            "exact_query_match_count": exact_query_match_count,
+            "artist_query_match": artist_query_match,
+            "city_query_match": city_query_match,
             "score_breakdown": {
                 "bm25_raw": bm25_part,
                 "embedding_raw": emb_part,
@@ -265,10 +355,17 @@ def search_events(query, intent):
     # --- TWO-STEP STRICT TIERS SORTING ---
     # Primary sorting key: Number of satisfied core criteria (descending)
     # Secondary sorting key: Mathematical hybrid baseline weight (descending)
-    all_scored_events.sort(key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
+    all_scored_events.sort(key=sort_event_key, reverse=True)
 
-    # Slice the top 30 best candidates out of the matrix to process through LLM evaluation
-    candidates = all_scored_events[:30]
+    # Process enough candidates to answer the requested page and know whether more exist.
+    candidate_count = 30
+    rerank_limit = 21
+
+    if limit is not None:
+        rerank_limit = offset + limit + 1
+        candidate_count = max(30, rerank_limit)
+
+    candidates = all_scored_events[:candidate_count]
 
     # 4. Perform localized LLM contextual re-ranking on the high-quality candidates subset
     intent_for_llm = {
@@ -277,7 +374,7 @@ def search_events(query, intent):
         "keywords": [k.lower() for k in intent.get("keywords", [])],
         "attending": [a.lower() for a in intent.get("attending", [])]
     }
-    reranked = rerank_events(query, intent_for_llm, candidates)
+    reranked = rerank_events(query, intent_for_llm, candidates, max_results=rerank_limit)
 
     best_recommendations = []
     you_may_also_like = []
@@ -335,20 +432,27 @@ def search_events(query, intent):
 
     print("="*70 + "\n")
 
-    return reranked
+    if limit is None:
+        return reranked
+
+    page_results = reranked[offset:offset + limit]
+
+    return {
+        "results": page_results,
+        "next_offset": offset + len(page_results),
+        "has_more": len(reranked) > offset + limit
+    }
 
 
 
 
 import json
-from random import shuffle as random_shuffle
 
-def rerank_events(query, intent, candidates):
+def rerank_events(query, intent, candidates, max_results=21):
     if not candidates:
         return []
     
     shuffled_candidates = list(candidates)
-    random_shuffle(shuffled_candidates)
 
     events_text = ""
     for i, e in enumerate(shuffled_candidates):
@@ -434,5 +538,9 @@ Events list to audit:
     except Exception as error:
         print(f"⚠️ Error during LLM reranking: {error}. Falling back to initial algorithmic scores.")
 
-    final_sorted_list = sorted(candidates, key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
-    return final_sorted_list[:21]
+    final_sorted_list = sorted(candidates, key=sort_event_key, reverse=True)
+
+    if max_results is None:
+        return final_sorted_list
+
+    return final_sorted_list[:max_results]

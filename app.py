@@ -11,9 +11,16 @@ def home():
 @app.route("/ask")
 def ask():
     user_query = request.args.get("q", "").strip()
+    limit = get_positive_int_arg("limit", 6, max_value=24)
+    offset = get_positive_int_arg("offset", 0, max_value=500)
 
     if not user_query:
-        return jsonify({"results": []})
+        return jsonify({
+            "results": [],
+            "limit": limit,
+            "offset": offset,
+            "has_more": False
+        })
 
     # INTENT EXTRACTION
     intent = extract_search_intent(user_query)
@@ -34,7 +41,8 @@ def ask():
         }
 
     # RANKING
-    results = search_events(user_query, intent)
+    page = search_events(user_query, intent, limit=limit, offset=offset)
+    results = page["results"]
 
     # RESPONSE
     for r in results:
@@ -43,8 +51,20 @@ def ask():
     return jsonify({
         "query": user_query,
         "intent": intent,
+        "limit": limit,
+        "offset": offset,
+        "next_offset": page["next_offset"],
+        "has_more": page["has_more"],
         "results": results
     })
+
+def get_positive_int_arg(name, default, max_value):
+    try:
+        value = int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+    return max(0, min(value, max_value))
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
