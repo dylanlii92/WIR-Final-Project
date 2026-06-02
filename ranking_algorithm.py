@@ -277,9 +277,6 @@ def search_events(query, intent):
     # 4. Perform localized LLM contextual re-ranking on the high-quality candidates subset
     reranked = rerank_events(query, intent, candidates)
 
-# 4. Trigger Re-ranker on the top 20 candidates
-    reranked = rerank_events(query, intent, candidates)
-
     # --- SÉPARATION STRICTE EN DEUX CATÉGORIES POUR LE FRONTEND ---
     best_recommendations = []
     you_may_also_like = []

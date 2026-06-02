@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 from groq import Groq
+from datetime import datetime
 
 env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
@@ -13,9 +14,20 @@ if not GROQ_API_KEY:
 
 client = Groq(api_key=GROQ_API_KEY)
 
+import json
+from datetime import datetime
+
 def extract_search_intent(user_query):
-    system_prompt = """
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")                      
+    day_of_week = now.strftime("%A")                           
+
+    system_prompt = f"""
 You are a high-precision query understanding system for a music/event search engine.
+
+CRITICAL TIME ANCHOR:
+- TODAY'S DATE IS EXACTLY: {today_str} ({day_of_week}).
+- Use this exact date as your reference point for ALL relative time calculations.
 
 CRITICAL RULES:
 - Extract all intent in lowercase.
@@ -29,7 +41,6 @@ CRITICAL RULES:
 TITLES RULES:
 - Extract any mention of specific event titles. 
 - Only extract explicit names. For example, "I am looking for tickets for Lollapalooza" -> title is "lollapalooza", but "I want to go to a Coldplay concert" -> no title, even if Coldplay is an artist, the user didn't explicitly mention a specific event title. 
-
 
 CITIES RULES:
 - Always extract city names in lowercase (e.g., "new york", "los angeles", "chicago"). 
@@ -49,7 +60,6 @@ GENRES/SUBGENRES RULES:
 - Try not to mistake artist names/ venues for genres. If unsure, use context clues or search the web to confirm.
 - If the query mentions "i can listen to any genre except rock", do not write "every genre" in the genres field, but rather leave it empty and write "rock" in the exclusions.genres field. The same applies to subgenres.
 
-
 MOOD RULES:
 - This is more subjective, but try as much as you can to infer one or several moods to every query.
 - Most common moods include: chill, fun, sad, happy, energetic, romantic, family-friendly, chaotic, etc.
@@ -59,28 +69,25 @@ MOOD RULES:
 EVENT TYPE RULES:
 - Common event types include: concert, festival, club night, open mic, karaoke, choir practice, etc. But be creative and adapt to the query. For example, "Are there any live music shows in NYC this weekend?" -> event type is likely "concert" or "live music show"
 
-
 ATTENDING RULES:
 -  Main categories would be "Alone", "With friends", "With a date", "Family", "Colleagues". Try to stick to these categories, unless the query explicitly mentions something else. 
 - Sometimes categories are named implicitly, with slang... For example, "with my uncle and my cousin" -> "family",  "with my buddies/crew/squad" -> "with friends"...
 - Response must be a possible answer to the question "Who are you going to the event with?"
 
 TIME RULES:
-
-- Convert any text dates into absolute ISO format (YYYY-MM-DD) inside the "start" and "end" fields.
-- EXAMPLES of conversions:
-  * "from 5th july to 15th august" -> {"start": "2026-07-05", "end": "2026-08-15"}
-  * "in december" -> {"start": "2026-12-01", "end": "2026-12-31"}
-  * "this summer" -> {"start": "2026-06-01", "end": "2026-08-31"}
-- If the user specifies a range without an explicit year, always assume it happens in 2026. 
-- EXAMPLES: 
-    * "from 5th july to 15th august" -> {"start": "2026-07-05", "end": "2026-08-15"}
-    * "between june and august" -> {"start": "2026-06-01", "end": "2026-08-31"}
-    * "in december" -> {"start": "2026-12-01", "end": "2026-12-31"}
-    * "this summer" -> {"start": "2026-06-01", "end": "2026-08-31"}
-- If the user specifies a date range that has already started or ended, keep the original dates without adjusting to the current date. For example, if today is August 10th, 2026 and the user says "events from july 1st to july 31st", the response should be {"start": "2026-07-01", "end": "2026-07-31"}, even though that range has already ended.
-- You also SHOULD be able to tackle relative date mentions like "tomorrow", "next week", "this weekend", "in 3 days", etc. For example, if today is August 10th, 2026 and the user says "events happening this weekend", the response should be {"start": "2026-08-14", "end": "2026-08-16"}. Use calendar logic to convert those relative date mentions into absolute dates in 2026.
-
+- Convert any text dates into absolute ISO format (YYYY-MM-DD) inside the "start" and "end" fields based on the CRITICAL TIME ANCHOR provided above.
+- CALENDAR CALCULATION RULES:
+  * "tomorrow": Add 1 day to the anchor date.
+  * "this weekend": Return the range from the upcoming Friday to Sunday. (e.g., If today is Monday {today_str}, 'this weekend' starts this coming Friday and ends on Sunday).
+  * "next week": Calculate the dates for the subsequent Monday to Sunday range.
+  * "in X days": Add X days to the anchor date.
+- EXAMPLES of conversions (Assuming anchor is Monday 2026-06-01):
+  * "tomorrow" -> {{"start": "2026-06-02", "end": "2026-06-02"}}
+  * "this weekend" -> {{"start": "2026-06-05", "end": "2026-06-07"}}
+  * "from 5th july to 15th august" -> {{"start": "2026-07-05", "end": "2026-08-15"}}
+  * "in december" -> {{"start": "2026-12-01", "end": "2026-12-31"}}
+- If the user specifies a range without an explicit year, always assume it happens in 2026.
+- If the user specifies a date range that has already started or ended, keep the original absolute dates without adjusting to the current date.
 
 KEYWORDS RULES:
 - Extract any other relevant keyword that could help with search/ranking, even if it's not explicitly mentioned.
@@ -89,7 +96,6 @@ KEYWORDS RULES:
 
 EXCLUSIONS RULES:
 - If the user query contains any explicit exclusions (e.g., "not in New York", "without Drake", "no rock music", "any time but June", "exclude concerts"...), capture those in the "exclusions" field with the same structure as the main intent fields. This will help the ranking algorithm to filter out unwanted results more effectively.
-
 """
 
     user_prompt = f"""
@@ -143,8 +149,12 @@ Return exactly this JSON structure:
 
         text = response.choices[0].message.content.strip()
         data = json.loads(text)
+        
+        if not data.get("time"):
+            data["time"] = {"start": "", "end": ""}
+            
         data = normalize_intent(data)
-        print(data)
+        print("🎯 EXTRACTED INTENT:", data)
         return data
 
     except Exception as error:
