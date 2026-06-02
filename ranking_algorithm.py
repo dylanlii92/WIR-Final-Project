@@ -271,7 +271,13 @@ def search_events(query, intent):
     candidates = all_scored_events[:30]
 
     # 4. Perform localized LLM contextual re-ranking on the high-quality candidates subset
-    reranked = rerank_events(query, intent, candidates)
+    intent_for_llm = {
+        "mood": [m.lower() for m in intent.get("mood", [])],
+        "event_type": [e.lower() for e in intent.get("event_type", [])],
+        "keywords": [k.lower() for k in intent.get("keywords", [])],
+        "attending": [a.lower() for a in intent.get("attending", [])]
+    }
+    reranked = rerank_events(query, intent_for_llm, candidates)
 
     best_recommendations = []
     you_may_also_like = []
@@ -364,7 +370,7 @@ You are an uncompromising, high-precision music event critic. Your job is to str
 - Score is out of 5 points.
 - Your goal is to assess if the event matches the SUBJECTIVE criteria of the user's query, ie the fields "mood", "keywords", "event_type" and "attending". 
 - To do so, you will mainly focus on the description and the title of the event. 
-- First check if the event description is relevant or only contains practical information (opening hours, ticketing info, etc). If the description is not relevant, you MUST give a score of 0 points.
+- First check if the event description is relevant or only contains practical information (opening hours, ticketing info, etc). If the description is not relevant, you MUST give a score of 0 points and reason should simply be "No description" or "Description only contains practical information".
 
 ### SCORING SCALE EXAMPLES:
 - 0 points: No description / description only contains practical information OR the vibe of the event is completely off compared to the query (for example, a metal concert for a "chill evening" query).
@@ -389,9 +395,9 @@ Return JSON only in this exact format structure:
 {{
   "events": [    
     {{
-      "index": 0, 
-      "reason": "The event matches the energetic mood but fails the family attending criteria because it is adults-only.",
-      "score": 2
+      "index": Index of the event in the provided list (integer), 
+      "reason": "Reason for the score given. Be specific about which criteria align or misalign with the query intent.",
+      "score": Score out of 5 points (integer or float)
     }}
   ]
 }}
