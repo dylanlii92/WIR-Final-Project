@@ -163,7 +163,7 @@ def search_events(query, intent):
         genre_matched = False
         for genre in intent_genres:
             if genre in (meta["genre"] + " " + meta["subgenre"]).lower():
-                multiplier += 0.3
+                multiplier += 0.5
                 bonus_details["genre_match"] = 0.5
                 genre_matched = True
         if genre_matched:
@@ -173,25 +173,20 @@ def search_events(query, intent):
         subgenre_matched = False
         for subgenre in intent_subgenres:
             if subgenre in (meta["genre"] + " " + meta["subgenre"]).lower():
-                multiplier += 0.3
+                multiplier += 0.5
                 bonus_details["subgenre_match"] = 0.5
                 subgenre_matched = True
-        # Avoid double-counting criterion if genre and subgenre matched the same keyword token
         if subgenre_matched:
             criteria_met_count += 1
 
         # ---- RULE 7: Absolute Date / Time Window Check ----
         event_date = meta.get("date", "") # Expected format: "YYYY-MM-DD"
         time_matched = False
-        
-        # We check if both start and end dates are provided and not empty
         if start_target and end_target and event_date:
-            # Check if the catalog event falls within the bounds of the extracted dates
             if start_target <= event_date <= end_target:
                 multiplier += 0.5
                 bonus_details["date_window_match"] = 0.5
-                time_matched = True   
-                
+                time_matched = True          
         if time_matched:
             criteria_met_count += 1
                 
@@ -271,23 +266,23 @@ def search_events(query, intent):
     # Secondary sorting key: Mathematical hybrid baseline weight (descending)
     all_scored_events.sort(key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
 
-    # Slice the top 20 best candidates out of the matrix to process through LLM evaluation
-    candidates = all_scored_events[:20]
+    # Slice the top 30 best candidates out of the matrix to process through LLM evaluation
+    candidates = all_scored_events[:30]
 
     # 4. Perform localized LLM contextual re-ranking on the high-quality candidates subset
     reranked = rerank_events(query, intent, candidates)
 
-    # --- SÉPARATION STRICTE EN DEUX CATÉGORIES POUR LE FRONTEND ---
     best_recommendations = []
     you_may_also_like = []
+    show_more = []
 
     for e in reranked:
-        # Condition ultra-sélective : 4 critères stricts ou plus, et maximum 3 événements
-        if e["criteria_count"] >= 4 and len(best_recommendations) < 3:
+        if len(best_recommendations) <= 3:
             best_recommendations.append(e)
-        else:
-            # Tout le reste (les critères < 4 ET les débordements au-delà du top 3) va ici
+        elif len(you_may_also_like) <= 6:
             you_may_also_like.append(e)
+        else:
+            show_more.append(e)
 
     # --- COMPREHENSIVE SCOREBOARD PRINT IN CONSOLE ---
     print("\n" + "="*70)
@@ -320,6 +315,19 @@ def search_events(query, intent):
         print(f"        |--> 🎯 Objective Criteria Met : {llm_obj}/6 pts  (Title, Artist, City, Genre, Date)")
         print(f"        |--> 🧠 Subjective Vibe Match  : {llm_sub}/4 pts  (Mood, Keywords, Context)")
     
+
+    print(f"Best Recommendations: {len(best_recommendations)}")
+    for i, e in enumerate(best_recommendations, 1):
+        print(f"   {i}. {e['name']} (Artist: {e['artist']})")
+    
+    print(f"You May Also Like: {len(you_may_also_like)}")
+    for i, e in enumerate(you_may_also_like, 1):
+        print(f"   {i}. {e['name']} (Artist: {e['artist']})")
+
+    print(f"Show More: {len(show_more)}")
+    for i, e in enumerate(show_more, 1):
+        print(f"   {i}. {e['name']} (Artist: {e['artist']})")
+
     print("="*70 + "\n")
 
     return reranked
@@ -386,7 +394,7 @@ Intent parsed:
 
 CRITICAL OUTPUT INSTRUCTIONS:
 - You MUST evaluate and return a score for EVERY single event in the list below.
-- Do not skip any event. If there are 20 events, your "events" array MUST contain exactly 20 JSON objects.
+- Do not skip any event. If there are 30 events, your "events" array MUST contain exactly 30 JSON objects.
 - Use the exact integer index provided in the bracket (e.g., [0], [1], [2]...) as the "index" field.
 
 Return JSON only in this exact format structure:
@@ -442,4 +450,4 @@ Events list:
             e["llm_subjective"] = 0
 
     final_sorted_list = sorted(candidates, key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
-    return final_sorted_list[:8]
+    return final_sorted_list[:21]
