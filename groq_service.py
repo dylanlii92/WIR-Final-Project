@@ -56,24 +56,27 @@ ARTISTS RULES:
 
 GENRES/SUBGENRES RULES:
 -  If a term is ambiguous (e.g., "rock" could be a genre or a verb), use your best judgment based on context. If unsure, it's safer to leave it out.
-- For subgenres, be specific if possible (e.g., "alternative rock" instead of just "rock") but only if it's clear from the query.
+- Try to extract first the main genres, and then the subgenres. For example, if the query says "I want to go to a jazz or blues concert", you can write "jazz" and "blues" in the genres field, but if the query says "I want to go to a smooth jazz concert", you can write "jazz" in the genres field and "smooth jazz" in the subgenres field.
+- Do not ever fill both fields with the same term. For example, if the query says "I want to go to a rock concert", you can write "rock" in the genres field, but not in the subgenres field.
 - Try not to mistake artist names/ venues for genres. If unsure, use context clues or search the web to confirm.
 - If the query mentions "i can listen to any genre except rock", do not write "every genre" in the genres field, but rather leave it empty and write "rock" in the exclusions.genres field. The same applies to subgenres.
 
 MOOD RULES:
 - This is more subjective, but try as much as you can to infer one or several moods to every query.
 - Most common moods include: chill, fun, sad, happy, energetic, romantic, family-friendly, chaotic, etc.
-- Do not only rely on explicit words, the overall vocab and tone of the query can also give clues about the mood. Eg: "I am not feeling to great atm but I want to listen to some live music" -> mood is likely "sad" or "chill" even if those words are not explicitly mentioned.
+- Do not only rely on explicit words, the overall vocabulary and tone of the query can also give clues about the mood. Eg: "I am not feeling too great atm but I want to listen to some live music" -> mood is likely "sad" or "chill" even if those words are not explicitly mentioned.
 - However, it must be an adjective refering to the vibe of an event. Words like "lit", "amazing", "biggest", etc., don't belong to this category, but more to the keywords category.
 
 EVENT TYPE RULES:
 - Common event types include: concert, festival, club night, open mic, karaoke, choir practice, etc. But be creative and adapt to the query. For example, "Are there any live music shows in NYC this weekend?" -> event type is likely "concert" or "live music show"
 
 ATTENDING RULES:
--  Main categories would be "Alone", "With friends", "With a date", "Family", "Colleagues". Try to stick to these categories, unless the query explicitly mentions something else. 
+-  Main categories would be "Alone", "With friends", "With a date", "With family (adults)", "With family(children)", "With colleagues". Try to stick to these categories, unless the query explicitly mentions something else. 
 - Sometimes categories are named implicitly, with slang... For example, "with my uncle and my cousin" -> "family",  "with my buddies/crew/squad" -> "with friends"...
 - Response must be a possible answer to the question "Who are you going to the event with?"
+- You must be able to distinguish between "with family (adults)" and "with family (children)", as lots of events are not kid-friendly. If both groups are mentioned or if the query just says "with family" without specifying, put "With family (children)", as children are likely to be the most restrictive factor when it comes to event attendance.
 
+ 
 TIME RULES:
 - Convert any text dates into absolute ISO format (YYYY-MM-DD) inside the "start" and "end" fields based on the CRITICAL TIME ANCHOR provided above.
 - CALENDAR CALCULATION RULES:
