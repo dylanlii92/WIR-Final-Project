@@ -1,4 +1,5 @@
 import json
+from random import shuffle as random_shuffle
 from groq_service import client
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -163,7 +164,7 @@ def search_events(query, intent):
         genre_matched = False
         for genre in intent_genres:
             if genre in (meta["genre"] + " " + meta["subgenre"]).lower():
-                multiplier += 0.3
+                multiplier += 0.5
                 bonus_details["genre_match"] = 0.5
                 genre_matched = True
         if genre_matched:
@@ -173,25 +174,20 @@ def search_events(query, intent):
         subgenre_matched = False
         for subgenre in intent_subgenres:
             if subgenre in (meta["genre"] + " " + meta["subgenre"]).lower():
-                multiplier += 0.3
+                multiplier += 0.5
                 bonus_details["subgenre_match"] = 0.5
                 subgenre_matched = True
-        # Avoid double-counting criterion if genre and subgenre matched the same keyword token
         if subgenre_matched:
             criteria_met_count += 1
 
         # ---- RULE 7: Absolute Date / Time Window Check ----
         event_date = meta.get("date", "") # Expected format: "YYYY-MM-DD"
         time_matched = False
-        
-        # We check if both start and end dates are provided and not empty
         if start_target and end_target and event_date:
-            # Check if the catalog event falls within the bounds of the extracted dates
             if start_target <= event_date <= end_target:
                 multiplier += 0.5
                 bonus_details["date_window_match"] = 0.5
-                time_matched = True   
-                
+                time_matched = True          
         if time_matched:
             criteria_met_count += 1
                 
@@ -271,26 +267,23 @@ def search_events(query, intent):
     # Secondary sorting key: Mathematical hybrid baseline weight (descending)
     all_scored_events.sort(key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
 
-    # Slice the top 20 best candidates out of the matrix to process through LLM evaluation
-    candidates = all_scored_events[:20]
+    # Slice the top 30 best candidates out of the matrix to process through LLM evaluation
+    candidates = all_scored_events[:30]
 
     # 4. Perform localized LLM contextual re-ranking on the high-quality candidates subset
     reranked = rerank_events(query, intent, candidates)
 
-# 4. Trigger Re-ranker on the top 20 candidates
-    reranked = rerank_events(query, intent, candidates)
-
-    # --- SÉPARATION STRICTE EN DEUX CATÉGORIES POUR LE FRONTEND ---
     best_recommendations = []
     you_may_also_like = []
+    show_more = []
 
     for e in reranked:
-        # Condition ultra-sélective : 4 critères stricts ou plus, et maximum 3 événements
-        if e["criteria_count"] >= 4 and len(best_recommendations) < 3:
+        if len(best_recommendations) < 3:
             best_recommendations.append(e)
-        else:
-            # Tout le reste (les critères < 4 ET les débordements au-delà du top 3) va ici
+        elif len(you_may_also_like) < 6:
             you_may_also_like.append(e)
+        else:
+            show_more.append(e)
 
     # --- COMPREHENSIVE SCOREBOARD PRINT IN CONSOLE ---
     print("\n" + "="*70)
@@ -316,33 +309,43 @@ def search_events(query, intent):
             print("     |  Bonus Details: No bonus applied")
             
 # Detailed LLM Reranker Output (Objective vs Subjective)
-        llm_total = e.get("llm_score", 0)
-        llm_obj = e.get("llm_objective", 0)
-        llm_sub = e.get("llm_subjective", 0)
-        print(f"     |- 🤖 LLM RERANKER ANALYSIS : {llm_total}/10 pts (Contribution: +{llm_total/10:.2f})")
-        print(f"        |--> 🎯 Objective Criteria Met : {llm_obj}/6 pts  (Title, Artist, City, Genre, Date)")
-        print(f"        |--> 🧠 Subjective Vibe Match  : {llm_sub}/4 pts  (Mood, Keywords, Context)")
+        llm_score = e.get("llm_score", 0)
+        reason = e.get("llm_reason", "No reason provided")
+        print(f"     |- 🤖 LLM RERANKER ANALYSIS : {llm_score}/5 pts (Contribution: +{llm_score/5:.2f})")
+        print(f"        |    📢 Reason: {reason}")
     
+
+    print(f"Best Recommendations: {len(best_recommendations)}")
+    for i, e in enumerate(best_recommendations, 1):
+        print(f"   {i}. {e['name']} (Artist: {e['artist']})")
+    
+    print(f"You May Also Like: {len(you_may_also_like)}")
+    for i, e in enumerate(you_may_also_like, 1):
+        print(f"   {i}. {e['name']} (Artist: {e['artist']})")
+
+    print(f"Show More: {len(show_more)}")
+    for i, e in enumerate(show_more, 1):
+        print(f"   {i}. {e['name']} (Artist: {e['artist']})")
+
     print("="*70 + "\n")
 
     return reranked
 
 
-# ---------------------------------------------------------
-# LLM STEP-2 CONTEXTUAL RE-RANKER
-# ---------------------------------------------------------
+
+
+import json
+from random import shuffle as random_shuffle
+
 def rerank_events(query, intent, candidates):
-    """
-    Leverages a reasoning model to cross-examine and score candidates, 
-    acting as a logical filter against location and genre hallucinations.
-    """
-    # Safety Check: If no candidates reached this stage, return an empty list immediately
     if not candidates:
         return []
+    
+    shuffled_candidates = list(candidates)
+    random_shuffle(shuffled_candidates)
 
-    # Flatten the payload into an optimized textual manifest to save LLM tokens
     events_text = ""
-    for i, e in enumerate(candidates):
+    for i, e in enumerate(shuffled_candidates):
         events_text += f"""
 [{i}]
 Title: {e['name']}
@@ -356,30 +359,21 @@ Description: {e['description']}
 """
 
     prompt = f"""
-You are a high-precision ranking expert for music events.  
-Your job is to rate how well each event matches the user's specific request.
+You are an uncompromising, high-precision music event critic. Your job is to strictly audit and score each candidate event based on how flawlessly it matches the user's query intent.
 
-CRITICAL: 
-- Each score must be an integer from 0 to 10, where 0 means "not relevant at all" and 10 means "perfect match".
-6 points are for the objective criteria, and 4 points are for the subjective criteria.
+- Score is out of 5 points.
+- Your goal is to assess if the event matches the SUBJECTIVE criteria of the user's query, ie the fields "mood", "keywords", "event_type" and "attending". 
+- To do so, you will mainly focus on the description and the title of the event. 
+- First check if the event description is relevant or only contains practical information (opening hours, ticketing info, etc). If the description is not relevant, you MUST give a score of 0 points.
 
-- First thing you do check is if the event satisfies the objective criteria extracted in the intent (city, state, artist, genre, subgenre, title, time fields). 
-If an event meets none of theses criteria, it should be ranked 0 or 1. The more criteria it meets, the higher the score should be. 
-The importance of each criterion is the following: Title > Artist > City > Genre/Subgenre > State > Date.
-The maximum score for an event that meets all criteria is 6 points.
+### SCORING SCALE EXAMPLES:
+- 0 points: No description / description only contains practical information OR the vibe of the event is completely off compared to the query (for example, a metal concert for a "chill evening" query).
+- 1-2 points: Poor alignment with the query. Generic description with no clear vibe or which doesn't match the mood of the query.
+- 3-4 points: Good alignment with the query. The description contains some relevant information and the vibe matches the context of the query.
+- 5 points: Excellent alignment with the query. The event perfectly satisfies all subjective criteria. BE HIGHLY DISCRIMINATIVE.
 
-- After that, you must analyze how well the event matches the subjective fields (mood, keywords, attending, event_type fields).
-To do so, you should mainly use the event description but also possibly the title (especially if the description is missing/very short).
-Do not only look for exact word matches, use your reasoning of language to determine if the event is relevant to the user's intent.
-For example, if the intent mood is "chill" and the event says "calm evening by the beach", this is a very good match. On the other hand, if the intent attending field says "with family", and the description says "only for 21++", this is a very bad match.
-You grading policy must be discriminative, only the most relevant events can get the full 4 subjective points.
-
-- The user may have expressed some exclusions in their intent (see the "exclusions" field). 
-If an event matches any of theexclusion criteria, it should be heavilily penalized in the scoring, receiving a score of 0, even if it matches lots of inclusion criteria. 
-For example, for the query "concert in june in boston, anything but jazz", if an event is in boston in june but is a jazz concert, it should get a LLM score of 0.
-You should pay attention to both OBJECTIVE and SUBJECTIVE exclusions, for example if the user says "I want to go to a chill rock concert, not too crowded", if an event has its description saying "REAL LOUD ROCK CONCERT, NOT FOR THE FAINT OF HEART", even if it matches the rock genre criteria, it should get a score of 0 because of the subjective "not too crowded" exclusion match.
-
-
+### ANTI-LAZINESS MANDATE
+- Evaluate each event INDEPENDENTLY. Treat every event index with the exact same critical attention and freshness.
 
 User query:
 {query}
@@ -387,62 +381,52 @@ User query:
 Intent parsed:
 {intent}
 
-CRITICAL OUTPUT INSTRUCTIONS:
-- You MUST evaluate and return a score for EVERY single event in the list below.
-- Do not skip any event. If there are 20 events, your "events" array MUST contain exactly 20 JSON objects.
-- Use the exact integer index provided in the bracket (e.g., [0], [1], [2]...) as the "index" field.
+### OUTPUT FORMAT INSTRUCTIONS:
+- You MUST evaluate and return an object for EVERY single event index provided. Do not skip any items.
+- Return ONLY valid JSON matching this structure.
 
 Return JSON only in this exact format structure:
 {{
   "events": [    
-    {{"index": 0, "objective_score": 4, "subjective_score": 2, "total_score": 6}},
-    {{"index": 1, "objective_score": 6, "subjective_score": 3, "total_score": 9}},
-    {{"index": 2, "objective_score": 1, "subjective_score": 1, "total_score": 2}}
-    // ... continue for ALL items up to the last event index
+    {{
+      "index": 0, 
+      "reason": "The event matches the energetic mood but fails the family attending criteria because it is adults-only.",
+      "score": 2
+    }}
   ]
 }}
 
-Events list:
+Events list to audit:
 {events_text}
 """
 
     for e in candidates:
         e["llm_score"] = 0
-        e["llm_objective"] = 0
-        e["llm_subjective"] = 0
+        e["llm_reason"] = "No reason provided"
 
     try:
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=[{"role":"user","content":prompt}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            response_format={"type":"json_object"}
+            response_format={"type": "json_object"}
         )
 
         response_content = json.loads(response.choices[0].message.content)
         llm_events = response_content.get("events", [])
 
-        # Map scores dynamically using index matching
         for item in llm_events:
             idx = item.get("index")
-            if idx is not None and idx < len(candidates):
-                obj = item.get("objective_score", 0)
-                sub = item.get("subjective_score", 0)
-                total = item.get("total_score", obj + sub)
+            if idx is not None and idx < len(shuffled_candidates):
+                score_received = item.get("score", 0)
+                reason_received = item.get("reason", "No reason provided")
                 
-                candidates[idx]["llm_score"] = total
-                candidates[idx]["llm_objective"] = obj
-                candidates[idx]["llm_subjective"] = sub
-                
-                # Normalization factor added to the final score matrix
-                candidates[idx]["score"] += float(total) / 10.0
+                shuffled_candidates[idx]["llm_score"] = score_received
+                shuffled_candidates[idx]["llm_reason"] = reason_received
+                shuffled_candidates[idx]["score"] += float(score_received) / 5.0
 
     except Exception as error:
         print(f"⚠️ Error during LLM reranking: {error}. Falling back to initial algorithmic scores.")
-        for e in candidates:
-            e["llm_score"] = 0
-            e["llm_objective"] = 0
-            e["llm_subjective"] = 0
 
     final_sorted_list = sorted(candidates, key=lambda x: (x["criteria_count"], x["score"]), reverse=True)
-    return final_sorted_list[:8]
+    return final_sorted_list[:21]
