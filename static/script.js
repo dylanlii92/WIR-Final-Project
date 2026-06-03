@@ -5,10 +5,13 @@ const statusContainer = document.getElementById("status");
 const showMoreButton = document.getElementById("show-more");
 
 const RESULTS_PER_PAGE = 6;
+const INITIAL_RESULTS_LIMIT = 12;
 let currentQuery = "";
 let nextOffset = 0;
 let visibleEventCount = 0;
 let isLoadingMore = false;
+let bestGrid = null;
+let alsoLikeGrid = null;
 
 searchForm.addEventListener("submit", async function (event) {
     event.preventDefault();
@@ -25,6 +28,8 @@ searchForm.addEventListener("submit", async function (event) {
     currentQuery = query;
     nextOffset = 0;
     visibleEventCount = 0;
+    bestGrid = null;
+    alsoLikeGrid = null;
 
     try {
         await fetchEventsPage({ append: false });
@@ -63,9 +68,10 @@ showMoreButton.addEventListener("click", async function () {
 });
 
 async function fetchEventsPage({ append }) {
+    const limit = append ? RESULTS_PER_PAGE : INITIAL_RESULTS_LIMIT;
     const params = new URLSearchParams({
         q: currentQuery,
-        limit: RESULTS_PER_PAGE,
+        limit,
         offset: nextOffset
     });
     const response = await fetch(`/ask?${params.toString()}`);
@@ -92,18 +98,76 @@ async function fetchEventsPage({ append }) {
         return;
     }
 
-    appendEvents(events);
+    let renderedCount = events.length;
 
-    visibleEventCount += events.length;
-    nextOffset = data.next_offset || visibleEventCount;
+    if (append) {
+        appendEventsToGrid(events, getOrCreateAlsoLikeSection());
+    } else {
+        renderedCount = renderInitialSections(events);
+    }
+
+    visibleEventCount += renderedCount;
+    nextOffset = visibleEventCount;
     statusContainer.textContent = `Showing ${visibleEventCount} events`;
-    showMoreButton.hidden = !data.has_more && events.length < RESULTS_PER_PAGE;
+    showMoreButton.hidden = !data.has_more && events.length <= renderedCount;
 }
 
-function appendEvents(events) {
+function renderInitialSections(events) {
+    const bestCount = getBestRecommendationCount(events);
+    const bestEvents = events.slice(0, bestCount);
+    const alsoLikeEvents = events.slice(bestCount, bestCount + RESULTS_PER_PAGE);
+
+    if (bestEvents.length) {
+        bestGrid = createResultsSection("Our best recommendations");
+        appendEventsToGrid(bestEvents, bestGrid);
+    }
+
+    if (alsoLikeEvents.length) {
+        alsoLikeGrid = createResultsSection("You may also like");
+        appendEventsToGrid(alsoLikeEvents, alsoLikeGrid);
+    }
+
+    return bestEvents.length + alsoLikeEvents.length;
+}
+
+function createResultsSection(title) {
+    const section = document.createElement("section");
+    section.className = "results-group";
+
+    section.innerHTML = `
+        <h2 class="results-heading">${escapeHtml(title)}</h2>
+        <div class="results-grid"></div>
+    `;
+
+    resultsContainer.appendChild(section);
+
+    return section.querySelector(".results-grid");
+}
+
+function getOrCreateAlsoLikeSection() {
+    if (!alsoLikeGrid) {
+        alsoLikeGrid = createResultsSection("You may also like");
+    }
+
+    return alsoLikeGrid;
+}
+
+function appendEventsToGrid(events, grid) {
     events.forEach(function (event) {
-        resultsContainer.appendChild(createEventCard(event));
+        grid.appendChild(createEventCard(event));
     });
+}
+
+function getBestRecommendationCount(events) {
+    const strongMatches = events.filter(function (event) {
+        return event.artist_query_match && event.city_query_match;
+    }).length;
+
+    if (strongMatches >= 6) {
+        return 6;
+    }
+
+    return Math.min(3, events.length);
 }
 
 function createEventCard(event) {
@@ -120,6 +184,8 @@ function createEventCard(event) {
 
         <div class="event-content">
             <h2>${escapeHtml(event.name || "Unknown event")}</h2>
+
+            <p><strong>Artist:</strong> ${escapeHtml(event.artist || "Unknown")}</p>
 
             <p><strong>Date:</strong> ${escapeHtml(event.date || "Unknown")}</p>
 
@@ -216,21 +282,36 @@ function getRecommendationReason(event) {
 
 function getMatchLabels(event) {
     const labels = [];
+    const bonuses = event.score_breakdown && event.score_breakdown.bonuses
+        ? event.score_breakdown.bonuses
+        : {};
 
-    if (event.artist_query_match) {
-        labels.push("Artist match");
+    if (event.artist_query_match || bonuses.artist_match) {
+        labels.push("Matched artist");
     }
 
-    if (event.city_query_match) {
-        labels.push("City match");
+    if (event.city_query_match || bonuses.city_match) {
+        labels.push("Matched city");
     }
 
-    if (event.criteria_count) {
-        labels.push(`${event.criteria_count} criteria matched`);
+    if (bonuses.state_match) {
+        labels.push("Matched state");
     }
 
-    if (event.explanation) {
-        labels.push(event.explanation);
+    if (bonuses.title_match) {
+        labels.push("Matched event title");
+    }
+
+    if (bonuses.genre_match) {
+        labels.push("Matched genre");
+    }
+
+    if (bonuses.subgenre_match) {
+        labels.push("Matched subgenre");
+    }
+
+    if (bonuses.date_window_match) {
+        labels.push("Matched date range");
     }
 
     return labels;

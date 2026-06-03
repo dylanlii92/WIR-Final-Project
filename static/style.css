@@ -181,6 +181,21 @@ body::before {
     margin-bottom: 24px;
 }
 
+.results-sections {
+    display: grid;
+    gap: 42px;
+}
+
+.results-heading {
+    margin: 0 0 18px;
+    color: var(--text);
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(30px, 4vw, 48px);
+    font-weight: 500;
+    letter-spacing: 0;
+    text-align: left;
+}
+
 .results-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -254,6 +269,7 @@ body::before {
 }
 
 .event-content h2 {
+    color: #222222;
     margin: 0 0 12px;
     font-size: 22px;
 }
