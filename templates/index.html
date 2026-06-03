@@ -2,28 +2,42 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Festival Finder</title>
+    <title>Vibely</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <div class="ambient ambient-left"></div>
+    <div class="ambient ambient-right"></div>
+    <div class="ambient ambient-top"></div>
+    <div class="line-art line-art-one"></div>
+    <div class="line-art line-art-two"></div>
+
+    <header class="site-header">
+        <a href="/" class="site-brand">Vibely</a>
+    </header>
+
     <main class="page">
         <section class="hero">
-            <p class="tagline">US music events</p>
-            <h1>Find the perfect music event for your mood</h1>
+            <h1>Find your next live music moment</h1>
 
             <form id="search-form" class="search-box">
-                <input
+                <textarea
                     id="search-input"
-                    type="text"
-                    placeholder="Search"
+                    placeholder="Describe the concert, artist, city, or mood you want..."
+                    rows="3"
                     required
-                >
-                <button type="submit">Search</button>
+                ></textarea>
+                <button type="submit" aria-label="Search">→</button>
             </form>
         </section>
 
         <section id="status" class="status"></section>
-        <section id="results" class="results-grid"></section>
+        <section id="results" class="results-sections"></section>
+        <div class="show-more-wrap">
+            <button id="show-more" class="show-more-button" type="button" hidden>
+                Show more
+            </button>
+        </div>
     </main>
 
     <script src="/static/script.js"></script>
